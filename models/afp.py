@@ -32,65 +32,86 @@ class AdaptiveKeyFrameSelector(nn.Module):
         return F.sigmoid(self.pred(out))
 
 
-# class KernelWeightPredictor(nn.Module):
-#     '''
-#     Produces the weights used for the Spatially Variant Convolution
-#     '''
-#     def __init__(self, in_channels=1024):
-#         self.conv_reduce = nn.Conv2d(in_channels=in_channels, out_channels=256, kernel_size=3, padding=1)
-#         self.conv_2 = nn.Conv2d(in_channels=512, out_channels=256, kernel_size=3, padding=1)
-#         self.conv_3 = nn.Conv2d(in_channels=256, out_channels=81, kernel_size=1)
-#         pass
-#
-#     def forward(self, current_frame_low_features, key_frame_low_features):
-#         cur = F.relu(self.conv_reduce(current_frame_low_features))
-#         key = F.relu(self.conv_reduce(key_frame_low_features))
-#         out = F.relu(self.conv_2(torch.cat((cur, key), 1)))
-#         out = F.softmax(out, 1)  # output dim = N x (9**2) x W x H
-#         out = out.view(-1, 9,9, out.size()[2], out.size()[3])
+class KernelWeightPredictor(nn.Module):
+    '''
+    Produces the weights used for the Spatially Variant Convolution
+    '''
+    def __init__(self, in_channels=1024, k = 9):
+        self.k = k
+        super(KernelWeightPredictor, self).__init__()
+        self.conv_reduce = nn.Conv2d(in_channels=in_channels, out_channels=256, kernel_size=3, padding=1)
+        self.conv_2 = nn.Conv2d(in_channels=512, out_channels=256, kernel_size=3, padding=1)
+        self.conv_3 = nn.Conv2d(in_channels=256, out_channels=81, kernel_size=1)
+        pass
 
-# class AdaptiveFeaturePropagation(nn.Module):
-#     def __init__(self, in_channels=1024):
-#         self.kernel_weight_predictor = KernelWeightPredictor(in_channels)
-#
-#     def forward(self, current_frame_low_features, key_frame_low_features, key_frame_high_features):
-#         spatially_variant_kernels = self.kernel_weight_predictor(current_frame_low_features, key_frame_low_features)
-#
-#         out = torch.zeros(key_frame_high_features.size())
-#         temp = F.pad(key_frame_high_features, (0,0,4, 4), 'constant', 0)
-#         for i in range(N):
-#             for w_i in range(W):
-#                 for h_i range(H):
-#                     for c_i in range(C):
-#                         out[i, c_i, w_i, h_i] =
-#
-#         return torch.cat([F.conv2d()], 0)
+    def forward(self, current_frame_low_features, key_frame_low_features):
+        cur = F.relu(self.conv_reduce(current_frame_low_features))
+        key = F.relu(self.conv_reduce(key_frame_low_features))
+        out = F.relu(self.conv_2(torch.cat((cur, key), 1)))
+        out = F.softmax(out, 1)  # output dim = N x (K**2) x H x W
+        b, k2, h, w = out.shape
+        out = torch.transpose(out, (0, 2, 3, 1)).view(b, h, w, self.k)
+        return out
+
+class SpatiallyVariantConvolution(nn.Module):
+    def __init__(self, kernel_size):
+        super(SpatiallyVariantConvolution, self).__init__()
+        self.pad = nn.ConstantPad2d(2, 0)
+
+    def forward(self, kernels, features):
+        assert len(kernels.shape) == 5, 'need the shape b x h x w x k x k'
+        assert len(features.shape) == 4, 'need the shape b x c x h x w'
+        features = self.pad(features)
+        b, c, h, w = features.shape
+        _, _, _, k, _ = kernels.shape
+        features_strided = features.as_strided((b, c, h - k + 1, w - k + 1, k, k),
+                                               (c * h * w, h * w, w, 1, w, 1))
+        out = torch.einsum('bchwkl,bhwkl->bchw', (features_strided, kernels))
 
 
-# rep_flow version
 class AdaptiveFeaturePropagation(nn.Module):
-    def __init__(self, in_channels=1024, n_iter=5, learnable=True, flow_channels=32):
+    def __init__(self, in_channels=1024):
         super(AdaptiveFeaturePropagation, self).__init__()
-        self.conv_reduce = nn.Conv2d(in_channels=in_channels, out_channels=flow_channels, kernel_size=3, padding=1)
-        self.flow_layer = FlowLayer(channels=flow_channels, n_iter=n_iter, params=learnable)
-        self.conv_expand = nn.Conv2d(in_channels=flow_channels, out_channels=in_channels, kernel_size=3, padding=1)
-        self.conv_mix_0 = nn.Conv2d(in_channels=in_channels, out_channels=in_channels, kernel_size=3, padding=1)
-        self.conv_mix_1 = nn.Conv2d(in_channels=in_channels, out_channels=in_channels, kernel_size=3, padding=1)
+        self.kernel_weight_predictor = KernelWeightPredictor(in_channels)
 
     def forward(self, current_frame_low_features, key_frame_low_features, key_frame_high_features):
-        reduce_key = F.relu(self.conv_reduce(key_frame_low_features))
-        reduce_cur = F.relu(self.conv_reduce(current_frame_low_features))
-        x = torch.cat((reduce_key, reduce_cur), 2)
-        b, c, t, h, w = x.size()
-        u, v = self.flow_layer(x[:, :, :-1].permute(0, 2, 1, 3, 4).contiguous().view(-1, c, h, w),
-                               x[:, :, 1:].permute(0, 2, 1, 3, 4).contiguous().view(-1, c, h, w))
-        x = torch.cat([u, v], dim=1)
-        x = x.view(b, t - 1, c * 2, h, w).permute(0, 2, 1, 3, 4).contiguous().squeeze() #shape BxC*2xHxW
-        x = F.relu(self.conv_expand(x))
-        x = torch.cat((x, key_frame_high_features), 1)
-        x = F.relu(self.conv_mix_0(x))
-        x = F.relu(self.conv_mix_1(x))
-        return x
+        spatially_variant_kernels = self.kernel_weight_predictor(current_frame_low_features, key_frame_low_features)
+
+        out = torch.zeros(key_frame_high_features.size())
+        temp = F.pad(key_frame_high_features, (0,0,4, 4), 'constant', 0)
+        for i in range(N):
+            for w_i in range(W):
+                for h_i range(H):
+                    for c_i in range(C):
+                        out[i, c_i, w_i, h_i] =
+
+        return torch.cat([F.conv2d()], 0)
+
+
+# # rep_flow version
+# class AdaptiveFeaturePropagation(nn.Module):
+#     def __init__(self, in_channels=1024, n_iter=5, learnable=True, flow_channels=32):
+#         super(AdaptiveFeaturePropagation, self).__init__()
+#         self.conv_reduce = nn.Conv2d(in_channels=in_channels, out_channels=flow_channels, kernel_size=3, padding=1)
+#         self.flow_layer = FlowLayer(channels=flow_channels, n_iter=n_iter, params=learnable)
+#         self.conv_expand = nn.Conv2d(in_channels=flow_channels, out_channels=in_channels, kernel_size=3, padding=1)
+#         self.conv_mix_0 = nn.Conv2d(in_channels=in_channels, out_channels=in_channels, kernel_size=3, padding=1)
+#         self.conv_mix_1 = nn.Conv2d(in_channels=in_channels, out_channels=in_channels, kernel_size=3, padding=1)
+#
+#     def forward(self, current_frame_low_features, key_frame_low_features, key_frame_high_features):
+#         reduce_key = F.relu(self.conv_reduce(key_frame_low_features))
+#         reduce_cur = F.relu(self.conv_reduce(current_frame_low_features))
+#         x = torch.cat((reduce_key, reduce_cur), 2)
+#         b, c, t, h, w = x.size()
+#         u, v = self.flow_layer(x[:, :, :-1].permute(0, 2, 1, 3, 4).contiguous().view(-1, c, h, w),
+#                                x[:, :, 1:].permute(0, 2, 1, 3, 4).contiguous().view(-1, c, h, w))
+#         x = torch.cat([u, v], dim=1)
+#         x = x.view(b, t - 1, c * 2, h, w).permute(0, 2, 1, 3, 4).contiguous().squeeze() #shape BxC*2xHxW
+#         x = F.relu(self.conv_expand(x))
+#         x = torch.cat((x, key_frame_high_features), 1)
+#         x = F.relu(self.conv_mix_0(x))
+#         x = F.relu(self.conv_mix_1(x))
+#         return x
 
 class LowLatencyModel(nn.Module):
     def __init__(self, s_l, s_h, output_net, threshold = 0.3):
