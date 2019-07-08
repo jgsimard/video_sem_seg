@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.multiprocessing # TO DO
+import math
 
 from models.rep_flow_layer import FlowLayer
 
@@ -50,23 +51,23 @@ class KernelWeightPredictor(nn.Module):
         out = F.relu(self.conv_2(torch.cat((cur, key), 1)))
         out = F.softmax(out, 1)  # output dim = N x (K**2) x H x W
         b, k2, h, w = out.shape
-        out = torch.transpose(out, (0, 2, 3, 1)).view(b, h, w, self.k)
+        out = out.view(b, self.k, self.k, h, w)
+        # out = torch.transpose(out, (0, 2, 3, 1)).view(b, h, w, self.k)
         return out
 
 class SpatiallyVariantConvolution(nn.Module):
     def __init__(self, kernel_size):
         super(SpatiallyVariantConvolution, self).__init__()
-        self.pad = nn.ConstantPad2d(2, 0)
+        self.unfold = nn.Unfold(kernel_size=(kernel_size, kernel_size), padding=kernel_size // 2)
 
     def forward(self, kernels, features):
-        assert len(kernels.shape) == 5, 'need the shape b x h x w x k x k'
+        assert len(kernels.shape) == 5, 'need the shape b x k x k x h x w'
         assert len(features.shape) == 4, 'need the shape b x c x h x w'
         features = self.pad(features)
         b, c, h, w = features.shape
         _, _, _, k, _ = kernels.shape
-        features_strided = features.as_strided((b, c, h - k + 1, w - k + 1, k, k),
-                                               (c * h * w, h * w, w, 1, w, 1))
-        out = torch.einsum('bchwkl,bhwkl->bchw', (features_strided, kernels))
+        features_unfold = self.unfold(features).view(b, c, k, k, h, w)
+        out = torch.einsum('bcklhw,bklhw->bchw', (features_unfold, kernels))
 
 
 class AdaptiveFeaturePropagation(nn.Module):

@@ -13,6 +13,9 @@
 # print(x_strided)
 
 import torch
+import torch.nn.functional as F
+import torch.nn as nn
+import math
 n = 5
 k = 3
 
@@ -41,4 +44,18 @@ x_strided = x.as_strided((b, c, h - k + 1, w - k + 1, k, k), (c*h*w, h*w, w, 1, 
 # print(x_strided)
 print(x_strided.shape)
 print(x_strided[-1,-1,-1,-1,:,:])
+
+
+print("4D : Unfold")
+b, c, h, w = 2, 3, 4, 5
+k = 3
+p = 1
+x = torch.arange(b*c*h*w, dtype=torch.float).view(b, c, h, w)
+print(x)
+pad = math.floor(k/2)
+print("padding={pad}")
+unfold = nn.Unfold(kernel_size=(k,k), padding=pad)
+x_unfold = unfold(x).view(b, c, k, k, h, w)
+print(x_unfold.shape)
+print(x_unfold[-1,0,:,:,-1,-1])
 #size, stride
