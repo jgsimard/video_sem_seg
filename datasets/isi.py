@@ -18,7 +18,7 @@ class DeepSightRGB(Dataset):
         self.masks_dir = os.path.join(root_dir, "Masks")
         self.transform_train =  transforms.Compose([tr.RandomHorizontalFlip(),
                                                     tr.RandomVerticalFlip(),
-                                                    tr.RandomScaleCrop(base_size=513, crop_size=513, fill=255),
+                                                    tr.RandomScaleCrop(base_size=513, crop_size=513, fill=0),
                                                     tr.RandomRotate(15),
                                                     tr.RandomGaussianBlur(),
                                                     tr.Normalize(mean=(0.5, 0.5, 0.5),

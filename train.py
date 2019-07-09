@@ -17,6 +17,30 @@ from utils.saver import Saver
 from utils.summaries import TensorboardSummary
 from utils.metrics import Evaluator
 
+import models.convcrf as convcrf
+
+def onehot(targets, num_classes):
+    """Origin: https://github.com/moskomule/mixup.pytorch
+    convert index tensor into onehot tensor
+    :param targets: index tensor
+    :param num_classes: number of classes
+    """
+    # assert isinstance(targets, torch.LongTensor)
+    return torch.zeros(targets.size()[0], num_classes).scatter_(1, targets.view(-1, 1), 1)
+
+def mixup(inputs, targets, num_classes, alpha=0.4):
+    """Mixup on 1x32x32 mel-spectrograms.
+    """
+    s = inputs.size()[0]
+    weight = torch.Tensor(np.random.beta(alpha, alpha, s))
+    index = np.random.permutation(s)
+    x1, x2 = inputs, inputs[index, :, :, :]
+    y1, y2 = onehot(targets, num_classes), onehot(targets[index,], num_classes)
+    weight = weight.view(s, 1, 1, 1)
+    inputs = weight*x1 + (1-weight)*x2
+    weight = weight.view(s, 1)
+    targets = weight*y1 + (1-weight)*y2
+    return inputs, targets
 
 class Trainer(object):
     def __init__(self, args):
@@ -39,6 +63,10 @@ class Trainer(object):
                         output_stride=args.out_stride,
                         sync_bn=args.sync_bn,
                         freeze_bn=args.freeze_bn)
+
+        self.crf = None
+        if args.GaussCrf:
+            self.crf = convcrf.GaussCRF(conf=convcrf.isi_conf, shape=(513, 513), nclasses=self.nclass)
 
         train_params = [{'params': model.get_1x_lr_params(), 'lr': args.lr},
                         {'params': model.get_10x_lr_params(), 'lr': args.lr * 10}]
@@ -75,11 +103,16 @@ class Trainer(object):
             patch_replication_callback(self.model)
             self.model = self.model.cuda()
 
+            if args.GaussCrf:
+                self.crf = torch.nn.DataParallel(self.crf, device_ids=self.args.gpu_ids)
+                patch_replication_callback(self.crf)
+                self.crf = self.crf.cuda()
+
         # Resuming checkpoint
         self.best_pred = 0.0
         if args.resume is not None:
             if not os.path.isfile(args.resume):
-                raise RuntimeError("=> no checkpoint found at '{}'".format(args.resume))
+                raise RuntimeError(f"=> no checkpoint found at '{args.resume}'")
             checkpoint = torch.load(args.resume)
             args.start_epoch = checkpoint['epoch']
             if args.cuda:
@@ -89,8 +122,7 @@ class Trainer(object):
             if not args.ft:
                 self.optimizer.load_state_dict(checkpoint['optimizer'])
             self.best_pred = checkpoint['best_pred']
-            print("=> loaded checkpoint '{}' (epoch {})"
-                  .format(args.resume, checkpoint['epoch']))
+            print(f"=> loaded checkpoint '{args.resume}' (epoch {checkpoint['epoch']})")
 
         # Clear start epoch if fine-tuning
         if args.ft:
@@ -99,17 +131,23 @@ class Trainer(object):
     def training(self, epoch):
         train_loss = 0.0
         self.model.train()
+        # self.crf.train()
         tbar = tqdm(self.train_loader)
         num_img_tr = len(self.train_loader)
         for i, sample in enumerate(tbar):
             image, target = sample['image'], sample['label']
-            if image.shape[0] == 1: #will fail otherwise
+            if image.shape[0] == 1:  # will fail otherwise because cannot have a batch size of 1
                 continue
             if self.args.cuda:
                 image, target = image.cuda(), target.cuda()
+            if self.args.loss_type == 'cem':
+                image, target = mixup(image, onehot(target, 11), 11, alpha=0.4)
             self.scheduler(self.optimizer, i, epoch, self.best_pred)
             self.optimizer.zero_grad()
             output = self.model(image)
+            if self.crf is not None:
+                # self.crf.module.CRF.npixels = (513, 513)
+                output = self.crf.forward(unary = output, img = image)
             loss = self.criterion(output, target)
             loss.backward()
             self.optimizer.step()
@@ -134,10 +172,12 @@ class Trainer(object):
                 'state_dict': self.model.module.state_dict(),
                 'optimizer': self.optimizer.state_dict(),
                 'best_pred': self.best_pred,
+                'crf_dict': self.crf.state_dict()
             }, is_best)
 
     def validation(self, epoch):
         self.model.eval()
+        # self.crf.eval()
         self.evaluator.reset()
         tbar = tqdm(self.val_loader, desc='\r')
         test_loss = 0.0
@@ -147,6 +187,12 @@ class Trainer(object):
                 image, target = image.cuda(), target.cuda()
             with torch.no_grad():
                 output = self.model(image)
+                if self.crf is not None:
+                    # self.crf.module.CRF.npixels = (1080, 1080)
+                    # self.crf.module.CRF.height = 1080
+                    # self.crf.module.CRF.width = 1080
+                    # print(f"output, {output.shape}, img:{image.shape}")
+                    output = self.crf.forward(unary=output, img=image)
             loss = self.criterion(output, target)
             test_loss += loss.item()
             tbar.set_description('Test loss: %.3f' % (test_loss / (i + 1)))
@@ -180,10 +226,11 @@ class Trainer(object):
                 'state_dict': self.model.module.state_dict(),
                 'optimizer': self.optimizer.state_dict(),
                 'best_pred': self.best_pred,
+                'crf_dict': self.crf.state_dict()
             }, is_best)
 
-
-def main():
+#  pred = gausscrf.forward(unary=unary_var, img=img_var)
+def get_args():
     parser = argparse.ArgumentParser(description="PyTorch DeeplabV3Plus Training")
     parser.add_argument('--backbone',
                         type=str,
@@ -227,7 +274,7 @@ def main():
     parser.add_argument('--loss-type',
                         type=str,
                         default='ce',
-                        choices=['ce', 'focal'],
+                        choices=['ce', 'focal', 'cem'],
                         help='loss func type (default: ce)')
     # training hyper params
     parser.add_argument('--epochs',
@@ -281,7 +328,7 @@ def main():
     # cuda, seed and logging
     parser.add_argument('--no-cuda',
                         action='store_true',
-                        default= False,
+                        default=False,
                         help='disables CUDA training')
     parser.add_argument('--gpu-ids',
                         type=str,
@@ -321,8 +368,21 @@ def main():
                         type=str,
                         default='/home/deepsight2/development/data/rgb',
                         help='put the path to dataset root dir')
+    parser.add_argument('--GaussCrf',
+                        action='store_true',
+                        default=False,
+                        help='Add GaussCRF at the end of the model')
+    parser.add_argument('--ConvCrf',
+                        action='store_true',
+                        default=False,
+                        help='Add ConvCRF at the end of the model')
+    parser.add_argument('--crf_start_epoch',
+                        type=int,
+                        default=0,
+                        help='Epoch at which to start training the CRF (not stable if trained from the begining!)')
 
     args = parser.parse_args()
+
     args.cuda = not args.no_cuda and torch.cuda.is_available()
     if args.cuda:
         try:
@@ -363,6 +423,11 @@ def main():
 
     if args.checkname is None:
         args.checkname = 'deeplab-' + str(args.backbone)
+    return args
+
+
+def main():
+    args = get_args()
     print(args)
     torch.manual_seed(args.seed)
     trainer = Trainer(args)

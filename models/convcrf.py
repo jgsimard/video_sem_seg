@@ -2,10 +2,7 @@
 The MIT License (MIT)
 
 Copyright (c) 2017 Marvin Teichmann
-"""
-"""
 From the paper: Convolutional CRFs for Semantic Segmentation (https://arxiv.org/abs/1805.04777, https://github.com/MarvinTeichmann/ConvCRF)
-
 """
 
 from __future__ import absolute_import
@@ -35,8 +32,6 @@ except ImportError:
     #  It is ~15% slower.
     has_pyinn = False
     pass
-
-from utils import test_utils
 
 import torch
 import torch.nn as nn
@@ -82,6 +77,36 @@ default_conf = {
     "pyinn": False
 }
 
+# Default config as proposed by Philipp Kraehenbuehl and Vladlen Koltun,
+isi_conf = {
+    'filter_size': 11,
+    'blur': 4,
+    'merge': True,
+    'norm': 'none',
+    'weight': 'vector',
+    "unary_weight": 1,
+    "weight_init": 0.2,
+
+    'trainable': False,
+    'convcomp': False,
+    'logsoftmax': True,  # use logsoftmax for numerical stability
+    'softmax': True,
+    'final_softmax': False,
+
+    'pos_feats': {
+        'sdims': 3,
+        'compat': 3,
+    },
+    'col_feats': {
+        'sdims': 80,
+        'schan': 0.1,  # schan depend on the input scale, use schan = 13 for images in [0, 255], or normalized images in [-0.5, 0.5] try schan = 0.1
+        'compat': 10,
+        'use_bias': False
+    },
+    "trainable_bias": False,
+    "pyinn": False
+}
+
 # Config used for test cases on 10 x 10 pixel greyscale inpu
 test_config = {
     'filter_size': 5,
@@ -98,6 +123,7 @@ test_config = {
     'convcomp': False,
     "logsoftmax": True,  # use logsoftmax for numerical stability
     "softmax": True,
+    'final_softmax': False,
 
     'pos_feats': {
         'sdims': 1.5,
@@ -111,6 +137,7 @@ test_config = {
         'use_bias': True
     },
     "trainable_bias": False,
+    "pyinn": False,
 }
 
 
@@ -192,19 +219,20 @@ class GaussCRF(nn.Module):
         """
 
         conf = self.conf
-
         bs, c, x, y = img.shape
 
-        pos_feats = self.create_position_feats(sdims=self.pos_sdims, bs=bs)
-        col_feats = self.create_colour_feats(
-            img, sdims=self.col_sdims, schan=self.col_schan,
-            bias=conf['col_feats']['use_bias'], bs=bs)
+        pos_feats = self.create_position_feats(sdims=self.pos_sdims,
+                                               bs=bs)
+        col_feats = self.create_colour_feats(img,
+                                             sdims=self.col_sdims,
+                                             schan=self.col_schan,
+                                             bias=conf['col_feats']['use_bias'], bs=bs)
 
         compats = [self.pos_compat, self.col_compat]
 
         self.CRF.add_pairwise_energies([pos_feats, col_feats],
-                                       compats, conf['merge'])
-
+                                       compats,
+                                       conf['merge'])
         prediction = self.CRF.inference(unary, num_iter=num_iter)
 
         self.CRF.clean_filters()
@@ -310,7 +338,6 @@ class MessagePassingCol():
 
         self._gaus_list = []
         self._norm_list = []
-
         for feats, compat in zip(feat_list, compat_list):
             gaussian = self._create_convolutional_filters(feats)
             if not norm == "none":
@@ -350,7 +377,6 @@ class MessagePassingCol():
             if self.blur == 2:
                 assert(pad_0 == self.npixels[0] % 2)
                 assert(pad_1 == self.npixels[1] % 2)
-
             features = torch.nn.functional.avg_pool2d(features,
                                                       kernel_size=self.blur,
                                                       padding=(pad_0, pad_1),
@@ -358,6 +384,7 @@ class MessagePassingCol():
 
             npixels = [math.ceil(self.npixels[0] / self.blur),
                        math.ceil(self.npixels[1] / self.blur)]
+            # print(npixels, features.shape)
             assert(npixels[0] == features.shape[2])
             assert(npixels[1] == features.shape[3])
         else:
@@ -623,22 +650,52 @@ def get_test_conf():
 def get_default_conf():
     return default_conf.copy()
 
+
 if __name__ == "__main__":
+    def _get_simple_unary(batched=False):
+        unary1 = np.zeros((10, 10), dtype=np.float32)
+        unary1[:, [0, -1]] = unary1[[0, -1], :] = 1
+
+        unary2 = np.zeros((10, 10), dtype=np.float32)
+        unary2[4:7, 4:7] = 1
+
+        unary = np.vstack([unary1.flat, unary2.flat])
+        unary = (unary + 1) / (np.sum(unary, axis=0) + 2)
+
+        if batched:
+            unary = unary[np.newaxis,:]
+            # unary = unary.reshape(tuple([1]) + unary)
+
+        return unary
+
+
+    def _get_simple_img(batched=False):
+
+        img = np.zeros((10, 10, 3), dtype=np.uint8)
+        img[2:8, 2:8, :] = 255
+
+        if batched:
+            img = img[np.newaxis,:]
+            # img = img.reshape(tuple([1]) + img)
+
+
+        return img
+
     conf = get_test_conf()
     tcrf = GaussCRF(conf, [10, 10], None).cuda()
 
-    unary = test_utils._get_simple_unary()
-    img = test_utils._get_simple_img()
+    unary = _get_simple_unary(False)
+    img = _get_simple_img(False)
 
-    img = np.transpose(img, [2, 0, 1])
+    img = np.transpose(img, [2, 0, 1])[np.newaxis,:]
     img_torch = Variable(torch.Tensor(img), requires_grad=False).cuda()
 
     unary_var = Variable(torch.Tensor(unary)).cuda()
     unary_var = unary_var.view(2, 10, 10)
     img_var = Variable(torch.Tensor(img)).cuda()
 
-    prediction = tcrf.forward(unary_var, img_var).cpu().data.numpy()
+    prediction = tcrf.forward(unary_var, img_var).cpu().data.numpy().squeeze()
     res = np.argmax(prediction, axis=0)
-    import scipy.misc
-    scp.misc.imsave("out.png", res)
-    # d.addPairwiseBilateral(2, 2, img, 3)
+    print(img)
+    print(np.round(unary, 2))
+    print(res)

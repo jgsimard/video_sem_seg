@@ -10,4 +10,8 @@ python train.py --backbone resnet \
                 --checkname deeplab-resnet \
                 --eval-interval 1 \
                 --dataset isi \
-                --epochs 100
+                --epochs 100 \
+                --ft \
+                --resume ./run/isi/deeplab-resnet/model_best.pth.tar \
+                --dataset_dir /home/deepsight/data/rgb \
+                --loss-type cem
