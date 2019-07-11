@@ -98,6 +98,10 @@ class RandomGaussianBlur(object):
 
 class RandomScaleCrop(object):
     def __init__(self, base_size, crop_size, fill=0, scales=(0.5, 1.5)):
+        if isinstance(base_size, int):
+            base_size = (base_size, base_size)
+        if isinstance(crop_size, int):
+            crop_size = (crop_size, crop_size)
         self.base_size = base_size
         self.crop_size = crop_size
         self.fill = fill
@@ -107,7 +111,8 @@ class RandomScaleCrop(object):
         img = sample['image']
         mask = sample['label']
         # random scale (short edge)
-        short_size = random.randint(int(self.base_size * self.scales[0]), int(self.base_size *  self.scales[1]))
+        short_edge = min(self.base_size)
+        short_size = random.randint(int(short_edge * self.scales[0]), int(short_edge * self.scales[1]))
         w, h = img.size
         if h > w:
             ow = short_size
@@ -119,8 +124,8 @@ class RandomScaleCrop(object):
         mask = mask.resize((ow, oh), Image.NEAREST)
         # pad crop
         if short_size < self.crop_size:
-            padh = self.crop_size - oh if oh < self.crop_size else 0
-            padw = self.crop_size - ow if ow < self.crop_size else 0
+            padh = self.crop_size[0] - oh if oh < self.crop_size[0] else 0
+            padw = self.crop_size[1] - ow if ow < self.crop_size[1] else 0
             img = ImageOps.expand(img, border=(0, 0, padw, padh), fill=0)
             mask = ImageOps.expand(mask, border=(0, 0, padw, padh), fill=self.fill)
         # random crop crop_size

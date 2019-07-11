@@ -10,4 +10,8 @@ python train.py --backbone resnet \
                 --checkname deeplab-resnet \
                 --eval-interval 1 \
                 --dataset isi \
-                --epochs 100
+                --epochs 100 \
+                --dataset_dir /home/deepsight/data/rgb \
+                --GaussCrf
+#                --ft \
+#                --resume ./deeplab-resnet_imagenet.pth.tar
