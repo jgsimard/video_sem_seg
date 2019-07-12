@@ -89,8 +89,7 @@ class RandomGaussianBlur(object):
         img = sample['image']
         mask = sample['label']
         if random.random() < 0.5:
-            img = img.filter(ImageFilter.GaussianBlur(
-                radius=random.random()))
+            img = img.filter(ImageFilter.GaussianBlur(radius=random.random()))
 
         return {'image': img,
                 'label': mask}

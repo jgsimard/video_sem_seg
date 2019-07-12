@@ -64,101 +64,13 @@ class DeepSightRGB(Dataset):
         return sample
 
 
-def ply_pointcloud_writer(name, dt,
-                          pointcloud_format='xyz',
-                          semantic_seg=None,
-                          scores=None,
-                          instance_seg=None,
-                          class_label=None):
-    assert (pointcloud_format == 'xyz'), 'Only supports xyz format.'
-
-    # Add the point clould
-    vertex = np.array([tuple(r) for r in dt],
-                      dtype=[('x', 'd'), ('y', 'd'), ('z', 'd')])
-
-    ply_elem_list = [PlyElement.describe(vertex, 'vertex')]
-
-    # Add pixel level labels
-    vertex_label_list = []
-    vertex_label_dtype_list = []
-
-    if semantic_seg is not None:
-        vertex_label_list.append(semantic_seg)
-        vertex_label_dtype_list.append(('class', 'i4'))
-
-    if scores is not None:
-        vertex_label_list.append(scores)
-        vertex_label_dtype_list.append(('score', 'd'))
-
-    if instance_seg is not None:
-        vertex_label_list.append(instance_seg)
-        vertex_label_dtype_list.append(('instance_id', 'i4'))
-
-    if vertex_label_list is not None:
-        vertex_label = np.array(zip(*vertex_label_list),
-                                dtype=vertex_label_dtype_list)
-        ply_elem_list.append(PlyElement.describe(vertex_label, 'vertex_label'))
-
-    # Add class label
-    if class_label is not None:
-        label = np.array([(class_label)], dtype=[('class_id', 'i4')])
-        ply_elem_list.append(PlyElement.describe(label, 'label'))
-
-    PlyData(ply_elem_list, text=True).write(name)
-
-def pointcloud_reader(name, pointcloud_format='xyz',
-                          pointcloud_dtype=np.float32):
+def pointcloud_reader(name, pointcloud_format='xyz',  pointcloud_dtype=np.float32):
     with open(name, 'rb') as f:
         plydata = PlyData.read(f)
     map_dict = dict(x='x', y='y', z='z', i='intensity')
     pointcloud = np.stack([plydata['vertex'][map_dict[c]].astype(pointcloud_dtype) for c in pointcloud_format]).T
     return pointcloud
 
-def ply_pointcloud_reader(name, pointcloud_format='xyz',
-                          load_semantic_seg=False,
-                          load_instance_seg=False,
-                          load_scores=False,
-                          load_class_label=True,
-                          pointcloud_dtype=np.float32,
-                          npoints=None):
-    try:
-        with open(name, 'rb') as f:
-            plydata = PlyData.read(f)
-
-        map_dict = dict(x='x', y='y', z='z', i='intensity')
-
-        col_list = []
-        for c in pointcloud_format:
-            col = plydata['vertex'][map_dict[c]].astype(pointcloud_dtype)
-            col_list.append(col)
-        # pointcloud = np.unique(np.stack(col_list).T, axis=0)
-        pointcloud = np.stack(col_list).T
-
-        dt = [pointcloud]
-
-        if load_semantic_seg:
-            dt.append(plydata['vertex_label']['class'].astype(np.int32))
-
-        if load_instance_seg:
-            dt.append(plydata['vertex_label']['instance_id'].astype(np.int32))
-
-        if load_scores:
-            dt.append(plydata['vertex_label']['score'].astype(np.float32))
-
-        # Subsample points
-        if npoints:
-            while dt[0].shape[0] < npoints:
-                dt = [np.concatenate((e, e)) for e in dt]
-
-            choice = np.random.choice(dt[0].shape[0], size=npoints, replace=False)
-            dt = [e[choice] for e in dt]
-
-        if load_class_label:
-            dt.append(int(plydata['label']['class_id'][0]))
-    except ValueError as e:
-        print('Error in reading {}'.format(name))
-        raise
-    return [dt]
 
 class DeepSightDepth(Dataset):
     NUM_CLASSES = 11
@@ -171,19 +83,20 @@ class DeepSightDepth(Dataset):
         self.plys_dir = os.path.join(root_dir, "PLYs")
         self.xmls_dir = os.path.join(root_dir, "XMLs")
         self.split = split
-        # self.transform_train =  transforms.Compose([tr.RandomHorizontalFlip(),
-        #                                             tr.RandomVerticalFlip(),
-        #                                             tr.RandomScaleCrop(base_size=513, crop_size=513, fill=0),
-        #                                             tr.RandomRotate(15),
-        #                                             tr.RandomGaussianBlur(),
-        #                                             tr.Normalize(mean=(0.5, 0.5, 0.5),
-        #                                                          std=(0.5, 0.5, 0.5)),
-        #                                             tr.ToTensor()])
-        #
-        # self.transform_validation = transforms.Compose([tr.Normalize(mean=(0.5, 0.5, 0.5),
-        #                                                              std=(0.5, 0.5, 0.5)),
-        #                                                 tr.ToTensor()])
+        self.transform_train =  transforms.Compose([tr.RandomHorizontalFlip(),
+                                                    tr.RandomVerticalFlip(),
+                                                    tr.RandomScaleCrop(base_size=513, crop_size=513, fill=0),
+                                                    tr.RandomRotate(15),
+                                                    tr.RandomGaussianBlur(),
+                                                    tr.Normalize(mean=(0.5, 0.5, 0.5),
+                                                                 std=(0.5, 0.5, 0.5)),
+                                                    tr.ToTensor()])
 
+        self.transform_validation = transforms.Compose([tr.Normalize(mean=(0.5, 0.5, 0.5),
+                                                                     std=(0.5, 0.5, 0.5)),
+                                                        tr.ToTensor()])
+
+        print(self.xmls_dir)
         xml_files = []
         for dir_path, dir_names, file_names in os.walk(self.xmls_dir):
             xml_files += [os.path.join(dir_path, file) for file in file_names]
@@ -208,20 +121,17 @@ class DeepSightDepth(Dataset):
         depth = Image.open(depth_filename)
         label = Image.open(mask_filename)
         pointcloud = pointcloud_reader(ply_filename, pointcloud_format="xyzi")
-        print(ply_filename)
-        print(pointcloud)
-        print(pointcloud.shape)
+        pointcloud = np.reshape(pointcloud.T, (4,) + img.size).transpose((0, 2, 1))
         s = img.size
         print(s, s[0]*s[1])
-        sample = {'image': img, 'label': label}
+        sample = {'image': img, 'depth': depth, 'label': label, 'pointcloud': pointcloud}
 
+        if self.split == "train":
+            return self.transform_train(sample)
+        elif self.split == 'validation':
+            return self.transform_validation(sample)
 
-
-        # if self.split == "train":
-        #     return self.transform_train(sample)
-        # elif self.split == 'validation':
-        #     return self.transform_validation(sample)
-        # return sample
+        return sample
 
 
 if __name__ == "__main__":
@@ -233,10 +143,11 @@ if __name__ == "__main__":
     # print(len(rgb_dataset))
     # for i in range(len(rgb_dataset)):
     #     sample = rgb_dataset[i]
+    #     img = sample['image']
+    #     label = sample['label']
+    #     print(i, img.shape, label.shape, np.unique(label))
     #
-    #     print(i, sample['image'].shape, sample['label'].shape)
-    #
-    #     plt.imshow(np.transpose(np.asarray(sample['image']), (1, 2, 0)))
+    #     plt.imshow(np.transpose(np.asarray(img), (1, 2, 0)))
     #     plt.show()
     #     plt.imshow(sample['label'])
     #     plt.show()
@@ -256,21 +167,37 @@ if __name__ == "__main__":
     #     break
 
     print("Testing Depth dataset")
-    root_dir = "/home/deepsight2/development/data/sem_seg"
+    # root_dir = "/home/deepsight2/development/data/sem_seg"
+    root_dir = "/home/deepsight2/development/data/sem_seg_07_10_2019"
     depth_dataset = DeepSightDepth(root_dir)
     print(len(depth_dataset))
     fig = plt.figure()
     for i in range(len(depth_dataset)):
         sample = depth_dataset[i]
+        img = sample['image']
+        depth = sample['depth']
+        label = sample['label']
+        pc = sample['pointcloud']
 
-        print(i, sample['image'].shape, sample['label'].shape)
+        print(i, img.size, label.size, pc.shape, np.unique(label))
 
-        plt.imshow(np.transpose(np.asarray(sample['image']), (1, 2, 0)))
+        # plt.imshow(np.transpose(np.asarray(img), (1, 2, 0)))
+        plt.imshow(np.asarray(img))
+        plt.title("img")
         plt.show()
+
+        plt.imshow(depth)
+        plt.title("depth")
+        plt.show()
+
         plt.imshow(sample['label'])
+        plt.title("mask")
         plt.show()
 
-        if i == 5:
-            break
+        for j in range(4):
+            plt.imshow(pc[j,:,:])
+            plt.show()
+
+        break
 
 
