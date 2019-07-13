@@ -42,8 +42,8 @@ def make_data_loader(args, **kwargs):
         raise NotImplementedError
 
     elif args.dataset == "isi":
-        train_set = isi.DeepSightRGB(root_dir=args.dataset_dir, split="train")
-        val_set = isi.DeepSightRGB(root_dir=args.dataset_dir, split="validation")
+        train_set = isi.DeepSightDepth(root_dir=args.dataset_dir, split="train")
+        val_set = isi.DeepSightDepth(root_dir=args.dataset_dir, split="validation")
         num_class = train_set.NUM_CLASSES
         train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, **kwargs)
         val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False, **kwargs)

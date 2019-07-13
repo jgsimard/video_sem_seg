@@ -38,9 +38,9 @@ CAM_DIST[3] = np.array([0.1470, -0.1806, -0.0022, 0.0013, 0.0441])
 
 # load transformation (should have been in a json/mat file)
 T = CAM_NUM * [None]
-T[0] = torch.tensor([[1, 0, 0, 0],
-                     [0, 1, 0, 0],
-                     [0, 0, 1, 0],
+T[0] = torch.tensor([[0.998637149617664, 0.0210423473974330, 0.0477604754950395, -0.0123808505935194],
+                     [0.0291696689445358, 0.533808124654113, -0.845102370406642, 1.18856957459405],
+                     [-0.0432778675210864, 0.845343779576844, 0.532466825739935, 0.774820514239818],
                      [0, 0, 0, 1]]).type(torch.double)
 T[1] = torch.tensor([[0.767718219791565, 0.474479685211881, 0.430671293820828, -0.585330929621780],
                      [0.0775255440921717, 0.598383956289324, -0.797449955087308, 1.30580527484513],
@@ -50,13 +50,13 @@ T[2] = torch.tensor([[0.779933518013299, -0.487300286641689, -0.392736728761557,
                      [-0.00626475587245328, 0.621402929524694, -0.783466114144056, 1.24384315309774],
                      [0.625831015780825, 0.613511882376420, 0.481600155595578, 0.430077010957105],
                      [0, 0, 0, 1]]).type(torch.double)
-T[3] = torch.tensor([[0.998637149617664, 0.0210423473974330, 0.0477604754950395, -0.0123808505935194],
-                     [0.0291696689445358, 0.533808124654113, -0.845102370406642, 1.18856957459405],
-                     [-0.0432778675210864, 0.845343779576844, 0.532466825739935, 0.774820514239818],
+T[3] = torch.tensor([[1, 0, 0, 0],
+                     [0, 1, 0, 0],
+                     [0, 0, 1, 0],
                      [0, 0, 0, 1]]).type(torch.double)
 
 
-def project_point_cloud(xyz_pts, feature_src, target_camid):
+def project_point_cloud(xyz_pts, feature_src, cam_intrinsics_target, flip_horizontally=0, flip_vertically=1):
     """
     function to project a given feature vector to a target camera plane by using the point cloud
 
@@ -64,8 +64,10 @@ def project_point_cloud(xyz_pts, feature_src, target_camid):
         [B,3,W,H] tensor: point cloud points
     :param feature_src:
         [B,C+1,H,W]: features vector, including softmax scores of each class + depth
-    :param target_camid:
-        int: camera ID
+    :param cam_intrinsics_target:
+        [3,3]: target camera intrinsics
+    :param flip_horizontally
+    :param flip_vertically
 
     :return:
         [B,C+1,H,W]: flipped feature vector
@@ -74,7 +76,7 @@ def project_point_cloud(xyz_pts, feature_src, target_camid):
     # flatten feature
     batch = feature_src.shape[0]
     channel = feature_src.shape[1]
-    feature_src_flat = torch.flatten(feature_src.transpose(2, 3), 2)
+    feature_src_flat = torch.flatten(feature_src, 2)
 
     # normalize depth
     xyz_pts = xyz_pts.view(batch, 3, -1)  # format it as dimension Bx3xN
@@ -82,7 +84,7 @@ def project_point_cloud(xyz_pts, feature_src, target_camid):
     xyz_pts_norm = (xyz_pts / z).type(torch.double)
 
     # project
-    im_pts = torch.matmul(CAM_MTX[target_camid], xyz_pts_norm)
+    im_pts = torch.matmul(cam_intrinsics_target, xyz_pts_norm)
     # round img pts and only take x,y
     im_pts = torch.round(im_pts)[:, 0:2, :]  # im_pts format is Bx2xN
 
@@ -108,8 +110,13 @@ def project_point_cloud(xyz_pts, feature_src, target_camid):
         feature_dst[i, :, im_pts_valid[1, :], im_pts_valid[0, :]] = feature_src_valid
 
     # reshape feature_dst to the same format as input
-    feature_dst = feature_dst.reshape(batch, channel, HEIGHT, WIDTH)
-    return torch.flip(feature_dst, [2, 3])  # needs to flip horizontally and vertically
+    feature_dst = feature_dst.view(batch, channel, HEIGHT, WIDTH)
+    if flip_horizontally:
+        feature_dst = torch.flip(feature_dst, [3])
+    if flip_vertically:
+        feature_dst = torch.flip(feature_dst, [2])
+
+    return feature_dst
 
 
 def transform_point_cloud(xyz_src, T_src, T_target):
@@ -129,7 +136,8 @@ def transform_point_cloud(xyz_src, T_src, T_target):
     batch = xyz_src.shape[0]
 
     # make it homogeneous
-    xyz_homogeneous = torch.cat((xyz_src, torch.ones(batch, 1, HEIGHT, WIDTH)), dim=1)  # shape Bx4xHxW
+    xyz_homogeneous = torch.cat((xyz_src.type(torch.double), torch.ones(batch, 1, HEIGHT, WIDTH).type(torch.double)),
+                                dim=1)  # shape Bx4xHxW
     xyz_homogeneous = xyz_homogeneous.view(batch, 4, -1).type(torch.double)  # shape Bx4xN
 
     # transform point cloud
