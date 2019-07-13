@@ -126,13 +126,12 @@ class DeepSightDepth(Dataset):
         print(s, s[0]*s[1])
         sample = {'image': img, 'depth': depth, 'label': label, 'pointcloud': pointcloud}
 
-        if self.split == "train":
-            return self.transform_train(sample)
-        elif self.split == 'validation':
-            return self.transform_validation(sample)
+        # if self.split == "train":
+        #     return self.transform_train(sample)
+        # elif self.split == 'validation':
+        #     return self.transform_validation(sample)
 
         return sample
-
 
 if __name__ == "__main__":
     # print("Testing RGB dataset")
@@ -180,6 +179,7 @@ if __name__ == "__main__":
         pc = sample['pointcloud']
 
         print(i, img.size, label.size, pc.shape, np.unique(label))
+        print(np.asarray(img).shape, np.asarray(depth).shape)
 
         # plt.imshow(np.transpose(np.asarray(img), (1, 2, 0)))
         plt.imshow(np.asarray(img))
