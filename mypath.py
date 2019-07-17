@@ -10,7 +10,9 @@ class Path(object):
         elif dataset == 'coco':
             return '/path/to/datasets/coco/'
         elif dataset =="isi":
-            return '/home/deepsight2/development/data/rgb'
+            return '/home/deepsight/data/rgb'
+        elif dataset =="isi_intensity":
+            return '/home/deepsight/data/sem_seg_multiview_07_10_2019'
         else:
             print('Dataset {} not available.'.format(dataset))
             raise NotImplementedError

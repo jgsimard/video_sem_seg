@@ -123,6 +123,29 @@ class ResNet(nn.Module):
         x = self.layer4(x)
         return x, low_level_feat
 
+    def forward_low(self, input):
+        x = self.conv1(input)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+
+        x = self.layer1(x)
+        return x
+        # low_level_feat = x
+        # x = self.layer2(x)
+        # x = self.layer3(x)
+        # x = self.layer4(x)
+        # return x, low_level_feat
+
+    def forward_high(self, x):
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        return x
+    #
+    # def
+
+
     def _init_weight(self):
         for m in self.modules():
             if isinstance(m, nn.Conv2d):

@@ -42,7 +42,7 @@ def mixup(inputs, targets, num_classes, alpha=0.4):
     targets = weight*y1 + (1-weight)*y2
     return inputs, targets
 
-class Trainer(object):
+class TemporalTrainer(object):
     def __init__(self, args):
         self.args = args
 
@@ -66,17 +66,7 @@ class Trainer(object):
 
         self.crf = None
         if args.GaussCrf:
-            if self.args.TrainCrf:
-                conf = convcrf.isi_trainable_conf
-            else:
-                conf = convcrf.isi_untrainable_conf
-
-            if args.dataset =="isi_rgb":
-                shape = (513, 513)
-            elif args.dataset == "isi_intensity":
-                shape = (287,352)
-
-            self.crf = convcrf.GaussCRF(conf=conf, shape=shape, nclasses=self.nclass)
+            self.crf = convcrf.GaussCRF(conf=convcrf.isi__untrainable_conf, shape=(1080, 1080), nclasses=self.nclass)
 
         train_params = [{'params': model.get_1x_lr_params(), 'lr': args.lr},
                         {'params': model.get_10x_lr_params(), 'lr': args.lr * 10}]
@@ -100,14 +90,8 @@ class Trainer(object):
         self.model, self.optimizer = model, optimizer
 
         # Define Evaluator
-
-        if self.args.dataset == "isi_intensity":
-            weights = np.array([1, 1, 1, 1, 1, 1, 0, 1, 1, 0, 0, 1, 1]) > 0.5
-        else:
-            weights = None
-
-        self.evaluator = Evaluator(self.nclass, weights)
-        self.evaluator_crf = Evaluator(self.nclass, weights)
+        self.evaluator = Evaluator(self.nclass)
+        self.evaluator_crf = Evaluator(self.nclass)
         # Define lr scheduler
         self.scheduler = LR_Scheduler(args.lr_scheduler,
                                       args.lr,
@@ -134,24 +118,13 @@ class Trainer(object):
             args.start_epoch = checkpoint['epoch']
             if args.cuda:
                 self.model.module.load_state_dict(checkpoint['state_dict'])
-                if args.GaussCrf and 'crf_state_dict' in checkpoint:
-                    if checkpoint['crf_state_dict'] is not None:
-                        print("loading crf")
-                        self.crf.module.load_state_dict(checkpoint['crf_state_dict'])
             else:
                 self.model.load_state_dict(checkpoint['state_dict'])
-                if args.GaussCrf and 'crf_state_dict' in checkpoint:
-                    if checkpoint['crf_state_dict'] is not None:
-                        print("loading crf")
-                        self.crf.load_state_dict(checkpoint['crf_state_dict'])
             if not args.ft:
                 self.optimizer.load_state_dict(checkpoint['optimizer'])
             self.best_pred = checkpoint['best_pred']
             print(f"=> loaded checkpoint '{args.resume}' (epoch {checkpoint['epoch']})")
 
-        # for name, param in self.model.module.named_parameters():
-        #     print(f"{name}, {param}")
-        # print(self.model.module)
         # Clear start epoch if fine-tuning
         if args.ft:
             args.start_epoch = 0
@@ -159,8 +132,7 @@ class Trainer(object):
     def training(self, epoch):
         train_loss = 0.0
         self.model.train()
-        if self.args.TrainCrf:
-            self.crf.train()
+        # self.crf.train()
         tbar = tqdm(self.train_loader)
         num_img_tr = len(self.train_loader)
         for i, sample in enumerate(tbar):
@@ -174,8 +146,9 @@ class Trainer(object):
             self.scheduler(self.optimizer, i, epoch, self.best_pred)
             self.optimizer.zero_grad()
             output = self.model(image)
-            if self.crf is not None and self.args.TrainCrf:
-                output = self.crf(output, image)
+            # if self.crf is not None:
+            #     # self.crf.module.CRF.npixels = (513, 513)
+            #     output = self.crf.forward(unary = output, img = image)
             loss = self.criterion(output, target)
             loss.backward()
             self.optimizer.step()
@@ -200,7 +173,7 @@ class Trainer(object):
                 'state_dict': self.model.module.state_dict(),
                 'optimizer': self.optimizer.state_dict(),
                 'best_pred': self.best_pred,
-                'crf_state_dict': self.crf.module.state_dict() if self.crf is not None else None,
+                # 'crf_dict': self.crf.state_dict()
             }, is_best)
 
     def validation(self, epoch):
@@ -224,10 +197,7 @@ class Trainer(object):
                     # self.crf.module.CRF.width = 1080
                     # print(f"output, {output.shape}, img:{image.shape}")
                     output_crf = self.crf.forward(unary=output, img=image)
-            if self.crf is not None:
-                loss = self.criterion(output_crf, target)
-            else:
-                loss = self.criterion(output, target)
+            loss = self.criterion(output, target)
             test_loss += loss.item()
             tbar.set_description('Test loss: %.3f' % (test_loss / (i + 1)))
             pred = output.data.cpu().numpy()
@@ -266,9 +236,10 @@ class Trainer(object):
             self.writer.add_scalar('val/Acc_class_crf', Acc_class_crf, epoch)
             self.writer.add_scalar('val/fwIoU_crf', FWIoU_crf, epoch)
             print('Validation_crf:')
+            print('[Epoch: %d, numImages: %5d]' % (epoch, i * self.args.batch_size + image.data.shape[0]))
             print("Acc:{}, Acc_class:{}, mIoU:{}, fwIoU: {}".format(Acc_crf, Acc_class_crf, mIoU_crf, FWIoU_crf))
 
-        new_pred = mIoU_crf if self.crf is not None else mIoU
+        new_pred = mIoU
         if new_pred > self.best_pred:
             is_best = True
             self.best_pred = new_pred
@@ -277,7 +248,7 @@ class Trainer(object):
                 'state_dict': self.model.module.state_dict(),
                 'optimizer': self.optimizer.state_dict(),
                 'best_pred': self.best_pred,
-                'crf_state_dict': self.crf.module.state_dict() if self.crf is not None else None,
+                # 'crf_dict': self.crf.state_dict()
             }, is_best)
 
 #  pred = gausscrf.forward(unary=unary_var, img=img_var)
@@ -295,7 +266,7 @@ def get_args():
     parser.add_argument('--dataset',
                         type=str,
                         default='isi',
-                        choices=['pascal', 'coco', 'cityscapes', 'isi_rgb', 'isi_intensity', 'isi_depth', 'isi_intensi'],
+                        choices=['pascal', 'coco', 'cityscapes', 'isi'],
                         help='dataset name (default: isi)')
     parser.add_argument('--use-sbd',
                         action='store_true',
@@ -423,10 +394,10 @@ def get_args():
                         action='store_true',
                         default=False,
                         help='Add GaussCRF at the end of the model')
-    parser.add_argument('--TrainCrf',
+    parser.add_argument('--ConvCrf',
                         action='store_true',
                         default=False,
-                        help='Train GaussCRF at the end of the model')
+                        help='Add ConvCRF at the end of the model')
     parser.add_argument('--crf_start_epoch',
                         type=int,
                         default=0,
@@ -481,7 +452,7 @@ def main():
     args = get_args()
     print(args)
     torch.manual_seed(args.seed)
-    trainer = Trainer(args)
+    trainer = TemporalTrainer(args)
     print('Starting Epoch:', trainer.args.start_epoch)
     print('Total Epoches:', trainer.args.epochs)
     for epoch in range(trainer.args.start_epoch, trainer.args.epochs):
