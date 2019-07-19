@@ -205,7 +205,7 @@ class Trainer(object):
             self.optimizer.zero_grad()
 
             # go through network
-            output_single_view, output_merger = self.model(image, pc)
+            output_single_view, output_merger = self.model(image, pc, target)
             if self.crf is not None and self.args.TrainCrf:
                 output_merger = self.crf(output_merger, image)
 
@@ -246,7 +246,7 @@ class Trainer(object):
             # Show 10 * 3 inference results each epoch
             if i % (num_img_tr // 2) == 0:
                 global_step = i + num_img_tr * epoch
-                self.summary.visualize_image(self.writer, self.args.dataset, image[0, :, :, :, :],
+                self.summary.visualize_image_mulitview(self.writer, self.args.dataset, image[0, :, :, :, :],
                                              target[0, :, :, :], output_single_view[0, :, :, :, :],
                                              output_merger[0, :, :, :, :],
                                              global_step)
@@ -281,7 +281,7 @@ class Trainer(object):
                 image, target, pc = image.cuda(), target.cuda(), pc.cuda()
 
             with torch.no_grad():
-                output_single_view, output_merger = self.model(image, pc)
+                output_single_view, output_merger = self.model(image, pc, target)
                 if self.crf is not None:
                     # self.crf.module.CRF.npixels = (1080, 1080)
                     # self.crf.module.CRF.height = 1080

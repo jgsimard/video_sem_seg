@@ -146,8 +146,8 @@ class Merger(nn.Module):
 
         self.transform_train = transforms.Compose([
             tr.RandomHorizontalFlipMultiView(p=0.7),
-            tr.RandomRotate(p=0.7, degree=45),
-            tr.RandomGaussianBlur(p=0.7)
+            tr.RandomRotateMultiview(p=0.7, degree=45),
+            tr.RandomGaussianBlurMultiview(p=0.7)
         ])
 
     def forward(self, feature, xyzi, label):

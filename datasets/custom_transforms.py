@@ -3,8 +3,6 @@ import random
 import numpy as np
 from skimage import transform, filters
 from PIL import Image, ImageOps, ImageFilter
-from albumentations.pytorch import *
-from albumentations import *
 
 
 class Normalize(object):
@@ -148,6 +146,23 @@ class RandomHorizontalFlip(object):
                 'label': mask,
                 'random_image': random_image}
 
+class RandomVerticalFlip(object):
+    def __init__(self, temporal=False):
+        self.temporal = temporal
+
+    def __call__(self, sample):
+        img = sample['image']
+        mask = sample['label']
+        random_image = sample['random_image'] if self.temporal else None
+        if random.random() < 0.5:
+            img = img.transpose(Image.FLIP_TOP_BOTTOM)
+            mask = mask.transpose(Image.FLIP_TOP_BOTTOM)
+            random_image = random_image.transpose(Image.FLIP_TOP_BOTTOM) if self.temporal else None
+
+        return {'image': img,
+                'label': mask,
+                'random_image': random_image}
+
 
 class RandomHorizontalFlipMultiView(object):
     def __init__(self, p=0.5):
@@ -166,7 +181,7 @@ class RandomHorizontalFlipMultiView(object):
                 'label': label}
 
 
-class RandomRotate(object):
+class RandomRotateMultiview(object):
     def __init__(self, degree, p=0.5):
         self.degree = degree
         self.p = p
@@ -190,7 +205,7 @@ class RandomRotate(object):
                 'label': torch.tensor(mask).cuda()}
 
 
-class RandomGaussianBlur(object):
+class RandomGaussianBlurMultiview(object):
     def __init__(self, p=0.5):
         self.p = p
 
@@ -221,6 +236,43 @@ class RandomDropOut(object):
                 feature_in[:, camid, :, :, :] = 0
 
         return feature_in
+
+
+class RandomRotate(object):
+    def __init__(self, degree, temporal=False):
+        self.degree = degree
+        self.temporal = temporal
+
+    def __call__(self, sample):
+        img = sample['image']
+        mask = sample['label']
+        random_image = sample['random_image'] if self.temporal else None
+        rotate_degree = random.uniform(-1 * self.degree, self.degree)
+        img = img.rotate(rotate_degree, Image.BILINEAR)
+        mask = mask.rotate(rotate_degree, Image.NEAREST)
+        random_image = random_image.rotate(rotate_degree, Image.BILINEAR) if self.temporal else None
+
+        return {'image': img,
+                'label': mask,
+                'random_image': random_image}
+
+
+class RandomGaussianBlur(object):
+    def __init__(self, temporal=False):
+        self.temporal = temporal
+
+    def __call__(self, sample):
+        img = sample['image']
+        mask = sample['label']
+        random_image = sample['random_image'] if self.temporal else None
+        if random.random() < 0.5:
+            img = img.filter(ImageFilter.GaussianBlur(radius=random.random()))
+            random_image = random_image.filter(
+                ImageFilter.GaussianBlur(radius=random.random())) if self.temporal else None
+
+        return {'image': img,
+                'label': mask,
+                'random_image': random_image}
 
 
 class RandomScaleCrop(object):
@@ -271,6 +323,60 @@ class RandomScaleCrop(object):
             random_image = random_image.crop((x1, y1, x1 + self.crop_size[1], y1 + self.crop_size[0]))
         else:
             random_image = None
+
+        return {'image': img,
+                'label': mask,
+                'random_image': random_image}
+
+
+class FixScaleCrop(object):
+    def __init__(self, crop_size, temporal):
+        self.crop_size = crop_size
+        self.temporal = temporal
+
+    def __call__(self, sample):
+        img = sample['image']
+        mask = sample['label']
+        w, h = img.size
+        if w > h:
+            oh = self.crop_size
+            ow = int(1.0 * w * oh / h)
+        else:
+            ow = self.crop_size
+            oh = int(1.0 * h * ow / w)
+        img = img.resize((ow, oh), Image.BILINEAR)
+        mask = mask.resize((ow, oh), Image.NEAREST)
+        # center crop
+        w, h = img.size
+        x1 = int(round((w - self.crop_size) / 2.))
+        y1 = int(round((h - self.crop_size) / 2.))
+        img = img.crop((x1, y1, x1 + self.crop_size, y1 + self.crop_size))
+        mask = mask.crop((x1, y1, x1 + self.crop_size, y1 + self.crop_size))
+        if self.temporal:
+            random_image = sample['random_image']
+            random_image = random_image.resize((ow, oh), Image.BILINEAR)
+            random_image = random_image.crop((x1, y1, x1 + self.crop_size, y1 + self.crop_size))
+        else:
+            random_image = None
+
+        return {'image': img,
+                'label': mask,
+                'random_image': random_image}
+
+
+class FixedResize(object):
+    def __init__(self, size, temporal):
+        self.size = (size, size)  # size: (h, w)
+        self.temporal = temporal
+
+    def __call__(self, sample):
+        img = sample['image']
+        mask = sample['label']
+
+        assert img.size == mask.size
+
+        img = img.resize(self.size, Image.BILINEAR)
+        mask = mask.resize(self.size, Image.NEAREST)
 
         return {'image': img,
                 'label': mask,
