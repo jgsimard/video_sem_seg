@@ -77,7 +77,7 @@ class DeepLabMultiView(nn.Module):
         :param image:
             B x CAM_NUM x 3 x H x W
         :param pointcloud:
-            B x CAM_NUM x 3 x H x W
+            B x CAM_NUM x 4 x H x W
         :param label:
             B x CAM_NUM x H x W
         :return:
@@ -91,12 +91,22 @@ class DeepLabMultiView(nn.Module):
 
         batch = image.shape[0]
 
+        # print('printing maximum and minimum z')
+        # print(pointcloud.shape)
+        # print(pointcloud[:, :, 2, :, :].max())
+        # print(pointcloud[:, :, 2, :, :].min())
+        # plt.imshow(pointcloud[0, 0, 2, :, :].clone().cpu().data)
+        # plt.show()
+        # print('printing maximum and minimum z')
+
         # predict for each camera
         soft_label_singleview = torch.empty(batch, CAM_NUM, self.num_classes, HEIGHT, WIDTH).cuda()
         for b in range(batch):
             x = self.deeplab(image[b, :, :, :, :])  # CAM_NUM x num_class x H x W
+            # print(x.max())
+            # print(x.min())
             soft_label_singleview[b, :, :, :, :] = x
-            visualize(image[b, :, :, :, :], x)
+            # visualize(image[b, :, :, :, :], x)
 
         # merge the labels
         soft_label_multiview = self.merger(soft_label_singleview, pointcloud, label)

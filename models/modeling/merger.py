@@ -12,6 +12,8 @@ from torchvision import transforms
 from datasets import custom_transforms as tr
 from datasets.multiview_info import *
 
+from models.modeling.unet_model import UNet
+
 
 def project_point_cloud(xyz_pts, feature_src, cam_intrinsics_target, flip_horizontally=0, flip_vertically=1):
     """
@@ -128,18 +130,7 @@ class Merger(nn.Module):
         #     nn.Dropout(0.1),
         #     nn.Conv2d(CAM_NUM * (num_classes + 1), num_classes, kernel_size=1, stride=1))
 
-        self.conv = nn.Sequential(
-            nn.ReLU(),
-            BatchNorm(CAM_NUM * (num_classes + 1)),
-            nn.Conv2d(CAM_NUM * (num_classes + 1), CAM_NUM * (num_classes + 1), kernel_size=1, stride=1, padding=0,
-                      bias=False),
-            nn.ReLU(),
-            nn.Conv2d(CAM_NUM * (num_classes + 1), num_classes, kernel_size=1, stride=1, padding=0,
-                      bias=False),
-            nn.ReLU(),
-            BatchNorm(num_classes),
-            nn.Conv2d(num_classes, num_classes, kernel_size=1, stride=1, padding=0,
-                      bias=False))
+        self.unet = UNet(n_channels=(self.num_classes + 1) * CAM_NUM, n_classes=self.num_classes)
         self._init_weight()
 
         self.drop_out = tr.RandomDropOut(p=0.5)
@@ -149,6 +140,8 @@ class Merger(nn.Module):
             tr.RandomRotateMultiview(p=0.7, degree=45),
             tr.RandomGaussianBlurMultiview(p=0.7)
         ])
+
+        self.scale = 10.0
 
     def forward(self, feature, xyzi, label):
         """
@@ -201,7 +194,7 @@ class Merger(nn.Module):
             #     feature_tmp_projected = self.drop_out(feature_tmp_projected, CAM_NUM)
 
             # reformat the tensor to become BxCAM_NUM*(C+1)xHxW for network to process
-            feature_target = feature_tmp_projected.view(batch, -1, HEIGHT, WIDTH).cuda()
+            feature_target = feature_tmp_projected.view(batch, -1, HEIGHT, WIDTH).cuda()  # B x C x H x W
 
             # TODO: augmentation
             # # augmentation
@@ -225,8 +218,11 @@ class Merger(nn.Module):
             #     plt.title('depth')
             #     plt.show()
 
-            soft_label[:, camid_target, :, :, :] = self.conv(feature_target)
-            # print(score[camid_target].shape)
+            # normalization
+            feature_target = feature_target / self.scale
+
+            # go through network
+            soft_label[:, camid_target, :, :, :] = self.unet(feature_target)
 
         return soft_label
 

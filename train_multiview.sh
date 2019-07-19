@@ -6,7 +6,7 @@ python train_multiview.py --backbone resnet \
                 --epochs 50 \
                 --batch-size 4 \
                 --gpu-ids 0\
-                --checkname deeplab-multiview-crf \
+                --checkname deeplab-multiview-merger \
                 --eval-interval 1 \
                 --dataset isi_multiview \
                 --loss_type ce \
