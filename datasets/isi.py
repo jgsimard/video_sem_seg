@@ -4,42 +4,159 @@ from os.path import join
 import pandas as pd
 from PIL import Image
 import numpy as np
-import numpy.linalg as linalg
 import matplotlib.pyplot as plt
 from torchvision import transforms
 from datasets import custom_transforms as tr
-from plyfile import PlyData, PlyElement
-import torch
-from models.modeling.merger import transform_point_cloud, project_point_cloud, CAM_MTX
-
-WIDTH = 352
-HEIGHT = 287
-
-# load transformation (should have been in a json/mat file)
-CAM_NUM = 4
-T = CAM_NUM * [None]
-T[0] = np.array([[0.998637149617664, 0.0210423473974330, 0.0477604754950395, -0.0123808505935194],
-                 [0.0291696689445358, 0.533808124654113, -0.845102370406642, 1.18856957459405],
-                 [-0.0432778675210864, 0.845343779576844, 0.532466825739935, 0.774820514239818],
-                 [0, 0, 0, 1]])
-T[1] = np.array([[0.767718219791565, 0.474479685211881, 0.430671293820828, -0.585330929621780],
-                 [0.0775255440921717, 0.598383956289324, -0.797449955087308, 1.30580527484513],
-                 [-0.636080596318803, 0.645604886270830, 0.422605969917539, 0.319082229324211],
-                 [0, 0, 0, 1]])
-T[2] = np.array([[0.779933518013299, -0.487300286641689, -0.392736728761557, 0.679696448874243],
-                 [-0.00626475587245328, 0.621402929524694, -0.783466114144056, 1.24384315309774],
-                 [0.625831015780825, 0.613511882376420, 0.481600155595578, 0.430077010957105],
-                 [0, 0, 0, 1]])
-T[3] = np.array([[1, 0, 0, 0],
-                 [0, 1, 0, 0],
-                 [0, 0, 1, 0],
-                 [0, 0, 0, 1]])
-
-CAMID = {'royale_20180717_130600': 0, 'royale_20180717_130602': 1, 'royale_20180717_130603': 2,
-         'royale_20180717_130604': 3}
+from plyfile import PlyData
+import cv2
+import random
 
 
-def pointcloud_reader(name, pointcloud_format='xyz', pointcloud_dtype=np.float32):
+
+class DeepSightRGB(Dataset):
+    NUM_CLASSES = 11
+    def __init__(self, root_dir, split="train"):
+        self.root_dir = root_dir
+        self.split = split
+        self.imgs_dir = os.path.join(root_dir, "RGB_Images")
+        self.masks_dir = os.path.join(root_dir, "Masks")
+        self.transform_train =  transforms.Compose([tr.RandomHorizontalFlip(),
+                                                    tr.RandomScaleCrop(base_size=513, crop_size=513, fill=0),
+                                                    tr.RandomRotate(15),
+                                                    tr.RandomGaussianBlur(),
+                                                    tr.Normalize(mean=(0.5, 0.5, 0.5),
+                                                                 std=(0.5, 0.5, 0.5)),
+                                                    tr.ToTensor()])
+
+        self.transform_validation = transforms.Compose([tr.FixScaleCrop(crop_size=513),
+                                                        tr.Normalize(mean=(0.5, 0.5, 0.5),
+                                                                     std=(0.5, 0.5, 0.5)),
+                                                        tr.ToTensor()])
+
+        with open(os.path.join(root_dir, "Sets", f"{split}.txt"), 'r') as f:
+            basenames, imgs, masks = [], [], []
+            for basename in f:
+                img, mask= self.get_filenames(basename)
+                basenames.append(basename)
+                imgs.append(img)
+                masks.append(mask)
+            self.files = pd.DataFrame(list(zip(basenames, imgs, masks)),
+                                      columns=['basename', 'img_filename', 'label_filename'])
+        # self.files = self.files[:100]
+
+    def get_filenames(self, basename):
+        scene, id_in_scene = basename.strip("\n").split("scene")
+        img_filename = join(self.imgs_dir, scene, id_in_scene + ".jpg")
+        mask_filename = join(self.masks_dir, scene, id_in_scene + ".png")
+        return img_filename, mask_filename
+
+    def __len__(self):
+        return self.files.shape[0]
+
+    def __getitem__(self, item):
+        # img = np.asarray(Image.open(self.files['img_filename'][item]))
+        # label = np.asarray(Image.open(self.files['label_filename'][item]))
+        img = Image.open(self.files['img_filename'][item])
+        label = Image.open(self.files['label_filename'][item])
+        sample = {'image': img, 'label': label}
+
+        if self.split == "train":
+            return self.transform_train(sample)
+        elif self.split == 'validation':
+            return self.transform_validation(sample)
+        return sample
+
+
+def video_scene_to_name(datasets, sampeled_images_path):
+    mapping = {}
+    for dataset in datasets:
+        for root, dirs, files in os.walk(os.path.join(sampeled_images_path, dataset)):
+            if root.find("GH") >= 0:
+                id = files[0].split("scene")[0]
+                mapping[id] = root + ".MP4"
+    return mapping
+
+class DeepSightTemporalRGB(Dataset):
+    NUM_CLASSES = 11
+
+    def __init__(self, root_dir, split="train", sampeled_images_path="/home/deepsight/DeepSightData", train_range = 100, eval_distance = 5):
+        self.root_dir = root_dir
+        self.split = split
+        self.imgs_dir = os.path.join(root_dir, "RGB_Images")
+        self.masks_dir = os.path.join(root_dir, "Masks")
+        self.train_range = train_range
+        self.eval_distance = eval_distance
+
+        self.datasets = ['Feb_11_CDE',  'Feb_8_CDE',  'March_1_CDE']
+        self.mapping = video_scene_to_name(self.datasets, sampeled_images_path)
+
+        self.transform_train =  transforms.Compose([tr.RandomHorizontalFlip(temporal=True),
+                                                    tr.RandomScaleCrop(base_size=513, crop_size=513, fill=0, temporal=True),
+                                                    tr.RandomRotate(15, temporal=True),
+                                                    tr.RandomGaussianBlur(temporal=True),
+                                                    tr.Normalize(mean=(0.5, 0.5, 0.5),
+                                                                 std=(0.5, 0.5, 0.5), temporal=True),
+                                                    tr.ToTensor(temporal=True)])
+
+        self.transform_validation = transforms.Compose([tr.FixScaleCrop(crop_size=513, temporal=True),
+                                                        tr.Normalize(mean=(0.5, 0.5, 0.5),
+                                                                     std=(0.5, 0.5, 0.5), temporal=True),
+                                                        tr.ToTensor(temporal=True)])
+
+        with open(os.path.join(root_dir, "Sets", f"{split}.txt"), 'r') as f:
+            scenes, ids = [], []
+            for basename in f:
+                scene, id = basename.strip("\n").split("scene")
+                scenes.append(scene)
+                ids.append(id)
+            self.files = pd.DataFrame(list(zip(scenes, ids)),
+                                      columns=['scene', 'id'])
+
+    def __len__(self):
+        return len(self.files)
+
+    def __getitem__(self, item):
+        scene = self.files['scene'][item]
+        id = self.files['id'][item]
+        img_filename = join(self.imgs_dir, scene, id + ".jpg")
+        label_filename = join(self.masks_dir, scene, id + ".png")
+        img = Image.open(img_filename)
+        label = Image.open(label_filename)
+
+        flip = 1 <= int(scene) <= 12 \
+               or 29 <= int(scene) <= 32 \
+               or 42 <= int(scene) <= 54 \
+               or int(scene) == 76 \
+               or 78 <= int(scene) <= 79 \
+               or int(scene) == 106 \
+               or 109 <= int(scene) <= 114
+
+        vid = cv2.VideoCapture(self.mapping[scene])
+        fps = vid.get(cv2.CAP_PROP_FPS)
+        frame_count = vid.get(cv2.CAP_PROP_FRAME_COUNT)
+        frame_pos = int(id) - random.randint(1, self.train_range) if self.split is "train" else self.eval_distance
+        if fps > 31:
+            frame_pos *= 2
+        frame_pos = min(frame_count - 1, max(100, frame_pos)) # clip value in [100, frame_count - 1]
+        vid.set(cv2.CAP_PROP_POS_FRAMES, frame_pos)
+        res, random_frame = vid.read()
+
+        if flip:
+            random_frame = cv2.flip(random_frame, 0)
+            random_frame = cv2.flip(random_frame, 1)
+
+        sample = {'image': img, 'label': label, "random_image" : random_frame}
+
+        if self.split == "train":
+            return self.transform_train(sample)
+        elif self.split == 'validation':
+            return self.transform_validation(sample)
+        return sample
+
+
+
+
+def pointcloud_reader(name, pointcloud_format='xyz',  pointcloud_dtype=np.float32):
     with open(name, 'rb') as f:
         plydata = PlyData.read(f)
     map_dict = dict(x='x', y='y', z='z', i='intensity')
@@ -48,9 +165,8 @@ def pointcloud_reader(name, pointcloud_format='xyz', pointcloud_dtype=np.float32
 
 
 class DeepSightDepth(Dataset):
-    NUM_CLASSES = 11
-
-    def __init__(self, root_dir, split="train", transform=None):
+    NUM_CLASSES = 13
+    def __init__(self, root_dir, split="train", train_ratio = 0.9, transform=None, seed=1234):
         self.root_dir = root_dir
         self.depths_dir = os.path.join(root_dir, "Depths")
         self.images_dir = os.path.join(root_dir, "Images")
@@ -59,142 +175,158 @@ class DeepSightDepth(Dataset):
         self.plys_dir = os.path.join(root_dir, "PLYs")
         self.xmls_dir = os.path.join(root_dir, "XMLs")
         self.split = split
-        self.transform_train = transforms.Compose([
-            # tr.RandomHorizontalFlip(),
-            #  tr.RandomScaleCrop(base_size=513, crop_size=513, fill=0),
-            # tr.RandomRotate(15),
-            # tr.RandomGaussianBlur(),
-            # tr.Normalize(mean=(0.5,),
-            #             std=(0.5,)),
-            tr.ToTensor()])
+        self.weights = [1, 1, 1, 1, 1, 1, 0, 1, 1, 0, 0, 1, 1]
+
+        self.transform_train =  transforms.Compose([tr.RandomHorizontalFlip(),
+                                                    tr.RandomScaleCrop(base_size=(287, 352), crop_size=(287, 352), fill=0),
+                                                    tr.RandomRotate(15),
+                                                    tr.RandomGaussianBlur(),
+                                                    tr.Normalize(mean=(0.5, 0.5, 0.5),
+                                                                 std=(0.5, 0.5, 0.5)),
+                                                    tr.ToTensor()])
 
         self.transform_validation = transforms.Compose([tr.Normalize(mean=(0.5, 0.5, 0.5),
                                                                      std=(0.5, 0.5, 0.5)),
                                                         tr.ToTensor()])
 
-        print(self.xmls_dir)
-        # find the sequences
-        self.sequences = os.listdir(self.xmls_dir)
-        self.sequences.sort()
+        xml_files = []
+        for dir_path, dir_names, file_names in os.walk(self.xmls_dir):
+            xml_files += [os.path.join(dir_path, file) for file in file_names]
+        sequences = [file.split("/")[-2] for file in xml_files]
+        frame_ids = [file.split("/")[-1].split(".")[0] for file in xml_files]
+        self.files = pd.DataFrame(list(zip(sequences, frame_ids)),
+                                  columns=['sequence', 'frame_id'])
 
-        # read the frames
-        self.files = [[], [], [], []]
-        for idx, seq in enumerate(self.sequences):
-            self.files[idx] = os.listdir(os.path.join(self.xmls_dir, seq))
-            self.files[idx].sort()
-            self.files[idx] = [file.split('.')[0] for file in self.files[idx]]
+        # self.files = self.files[:100]
+        np.random.seed(seed)
+        mask = np.random.rand(len(self.files)) < train_ratio
+        if split == "train":
+            self.files = self.files[mask]
+        else:
+            self.files = self.files[~mask]
+        self.files = self.files.reset_index()
 
-        # read data split index
-        if self.split == "train":
-            filename = "train_data.txt"
-        elif self.split == "validation":
-            filename = "validation_tata.txt"
-        file = open(filename, 'r').readlines()
-        self.index = []
-        for i in range(len(file)):
-            self.index.append(int(i))
-        # self.files = pd.DataFrame(list(zip(sequences, frame_ids)),
-        #                          columns=['sequence', 'frame_id'])
+
 
     def __len__(self):
-        return len(self.files[0])
+        return len(self.files)
 
     def __getitem__(self, item):
-        index = self.index[item]
+        # print(item)
+        # try:
+        basename = os.path.join(self.files['sequence'][item], self.files['frame_id'][item])
+        # except:
+        #     print(f"ERROR : item={item}")
 
-        img = np.zeros((CAM_NUM,) + (1, HEIGHT, WIDTH))
-        depth = np.zeros((CAM_NUM,) + (1, HEIGHT, WIDTH))
-        label = np.zeros((CAM_NUM,) + (HEIGHT, WIDTH))
-        pointcloud = np.zeros((CAM_NUM,) + (3, HEIGHT, WIDTH))
+        img_filename = os.path.join(self.images_dir, basename + ".jpg")
+        depth_filename = os.path.join(self.depths_dir, basename + ".png")
+        mask_filename = os.path.join(self.masks_dir, basename + ".png")
+        ply_filename = os.path.join(self.plys_dir, basename + ".ply")
 
-        for seq in self.sequences:
-            camid = CAMID[seq]
-            frame = self.files[camid][index]
-            print(frame)
-            img_filename = os.path.join(self.images_dir, seq, frame + ".jpg")
-            depth_filename = os.path.join(self.depths_dir, seq, frame + ".png")
-            mask_filename = os.path.join(self.masks_dir, seq, frame + ".png")
-            ply_filename = os.path.join(self.plys_dir, seq, frame + ".ply")
 
-            img[camid, :, :, :] = np.asarray(Image.open(img_filename).convert('L'))[None,]
-            depth[camid, :, :, :] = np.asarray(Image.open(depth_filename))[None,]
-            label[camid, :, :] = Image.open(mask_filename)
-            pointcloud_tmp = pointcloud_reader(ply_filename, pointcloud_format="xyz")
-            # TODO: test point cloud
-            pointcloud_tmp = linalg.inv(T[camid]) @ np.concatenate((pointcloud_tmp.T, np.ones((1, img[camid].size))))
-            pointcloud[camid, :, :, :] = np.reshape(pointcloud_tmp[0:3, :], (3,) + (WIDTH, HEIGHT)).transpose(0, 2, 1)
-
-            s = img[camid, :, :].shape
-            print(s, s[0] * s[1])
-
+        img = Image.open(img_filename)
+        depth = Image.open(depth_filename)
+        label = np.array(Image.open(mask_filename))
+        label[label==255]=0
+        label = Image.fromarray(label)
+        pointcloud = pointcloud_reader(ply_filename, pointcloud_format="xyzi")
+        pointcloud = np.reshape(pointcloud.T, (4,) + img.size).transpose((0, 2, 1))
+        s = img.size
         sample = {'image': img, 'depth': depth, 'label': label, 'pointcloud': pointcloud}
 
-        # TODO: test aug
         if self.split == "train":
-            sample['image'] = torch.tensor(sample['image'])
-            sample['depth'] = torch.tensor(sample['depth'])
-            sample['label'] = torch.tensor(sample['label'])
-            sample['pointcloud'] = torch.tensor(sample['pointcloud'])
-
-        #    return self.transform_train(sample)
-        # elif self.split == 'validation':
-        #    return self.transform_validation(sample)
+            return self.transform_train(sample)
+        elif self.split == 'validation':
+            return self.transform_validation(sample)
 
         return sample
 
-
 if __name__ == "__main__":
+    print("Testing RGB dataset")
+    # root_dir = "/home/deepsight/data/rgb"
+    # set = "validation"
+    # rgb_dataset = DeepSightRGB(root_dir, set)
+    # fig = plt.figure()
+    # print(len(rgb_dataset))
+    # for i in range(len(rgb_dataset)):
+    #     sample = rgb_dataset[i]
+    #     img = sample['image']
+    #     label = sample['label']
+    #     print(i, img.shape, label.shape, np.unique(label))
+    #
+    #     plt.imshow(np.transpose(np.asarray(img), (1, 2, 0)))
+    #     plt.show()
+    #     plt.imshow(sample['label'])
+    #     plt.show()
+    #
+    #     break
+    #
+    # rgb_dataset = DeepSightRGB(root_dir, set)
+    #
+    # dataloader = DataLoader(rgb_dataset,
+    #                         batch_size=4,
+    #                         shuffle=True,
+    #                         num_workers=4)
+    #
+    # for i_batch, sample_batched in enumerate(dataloader):
+    #     print(sample_batched['image'].shape)
+    #     break
+
     print("Testing Depth dataset")
-    root_dir = "/home/deepsight3/dev/deepsight/MultiView/data"
-    depth_dataset = DeepSightDepth(root_dir, split="train")
-    train_generator = DataLoader(depth_dataset, shuffle=False, batch_size=1, num_workers=1)
+    # # root_dir = "/home/deepsight/data/sem_seg_07_10_2019"
+    # root_dir = "/home/deepsight/data/sem_seg_multiview_07_10_2019"
+    # # split = "validation"
+    # split = "train"
+    # depth_dataset = DeepSightDepth(root_dir, split)
+    # print(len(depth_dataset))
+    # fig = plt.figure()
+    # n = np.zeros(13)
+    # for i in range(len(depth_dataset)):
+    #     sample = depth_dataset[i]
+    #     # print(sample)
+    #     img = sample['image']
+    #     # depth = sample['depth']
+    #     label = sample['label']
+    #     # pc = sample['pointcloud']
+    #     uniques = np.unique(label).astype(int)
+    #     n[uniques] +=1
+    #     print(n)
+    #     # print(i, img.size(), label.size(), uniques)
+    #     # print(i, img.size, label.size, pc.shape, np.unique(label))
+    #     print(np.asarray(img).min(), np.asarray(img).max())
+    #
+    #     # plt.imshow(np.transpose(np.asarray(img), (1, 2, 0)))
+    #     # plt.imshow(np.asarray(img))
+    #     plt.imshow(np.asarray(img)[0,:,:], cmap='gray')
+    #     plt.title("img")
+    #     plt.show()
+    #     #
+    #     # # plt.imshow(depth)
+    #     # # plt.title("depth")
+    #     # # plt.show()
+    #     #
+    #     plt.imshow(sample['label'])
+    #     plt.title("mask")
+    #     plt.show()
+    #
+    #     # for j in range(4):
+    #     #     plt.imshow(pc[j,:,:])
+    #     #     plt.show()
+    #     #
+    #     # depth_array = np.asarray(depth)
+    #     # print(np.asarray(label).max())
+    #     break
 
-    print(len(depth_dataset))
-
-    for i_batch, sample in enumerate(train_generator):
+    print("Testing Temporal RGB dataset")
+    root_dir = "/home/deepsight/data/rgb"
+    set = "train"
+    rgb_dataset = DeepSightTemporalRGB(root_dir, set)
+    fig = plt.figure()
+    print(len(rgb_dataset))
+    for i in range(len(rgb_dataset)):
+        sample = rgb_dataset[i]
         img = sample['image']
-        depth = sample['depth']
         label = sample['label']
-        pc = sample['pointcloud']
+        print(i, img.shape, label.shape, np.unique(label))
 
-        print(img.shape)
-        print(depth.shape)
-        print(img.shape)
-        print(pc.shape)
 
-        print(img.size, label.size, pc.shape, np.unique(label))
-
-        plt.imshow(np.asarray(img[0, 0, 0, :, :]))
-        plt.title("img")
-        plt.show()
-
-        plt.imshow(depth[0, 0, 0, :, :])
-        plt.title("depth")
-        plt.show()
-
-        plt.imshow(label[0, 0, :, :])
-        plt.title("mask")
-        plt.show()
-
-        for j in range(3):
-            plt.imshow(pc[0, 0, j, :, :])
-            plt.show()
-
-        # test projection
-        src = 0
-        target = 1
-
-        xyz_input = torch.cat((pc, pc))[:, src, :, :, :]
-        feature_input = torch.cat((img, img))[:, src, :, :, :]
-        xyz_input_transformed = transform_point_cloud(xyz_input, torch.tensor(T[src]), torch.tensor(T[target]))
-
-        im_projected = project_point_cloud(xyz_input_transformed, feature_input, CAM_MTX[target])
-
-        plt.imshow(im_projected[1, 0, :, :].reshape(HEIGHT, WIDTH), cmap='gray')
-        plt.show()
-        plt.imshow(img[0, src, 0, :, :], cmap='gray')
-        plt.show()
-        plt.imshow(img[0, target, 0, :, :], cmap='gray')
-        plt.show()
-
-        break

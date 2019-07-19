@@ -199,8 +199,14 @@ def decode_segmap(label_mask, dataset, plot=False):
     elif dataset == 'cityscapes':
         n_classes = 19
         label_colours = get_cityscapes_labels()
-    elif dataset == 'isi':
+    elif dataset == 'isi_rgb':
         n_classes = 11
+        label_colours = get_pascal_labels()
+    elif dataset == 'isi_intensity':
+        n_classes = 13
+        label_colours = get_pascal_labels()
+    elif dataset == 'isi_multiview':
+        n_classes = 13
         label_colours = get_pascal_labels()
     else:
         raise NotImplementedError

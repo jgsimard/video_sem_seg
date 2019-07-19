@@ -24,33 +24,33 @@ def visualize(image, soft_label):
                                 dataset='isi_multiview'), 4, normalize=False, range=(0, 255))
     plt.imshow(np.transpose(grid_image, (1, 2, 0)))
     plt.show()
-    # for i in range(CAM_NUM):
-    #     plt.imshow(soft_label[i, 0, :, :].clone().cpu().numpy())
-    #     plt.show()
-    #     plt.imshow(soft_label[i, 1, :, :].clone().cpu().numpy())
-    #     plt.show()
-    #     plt.imshow(soft_label[i, 2, :, :].clone().cpu().numpy())
-    #     plt.show()
-    #     plt.imshow(soft_label[i, 3, :, :].clone().cpu().numpy())
-    #     plt.show()
-    #     plt.imshow(soft_label[i, 4, :, :].clone().cpu().numpy())
-    #     plt.show()
-    #     plt.imshow(soft_label[i, 5, :, :].clone().cpu().numpy())
-    #     plt.show()
-    #     plt.imshow(soft_label[i, 6, :, :].clone().cpu().numpy())
-    #     plt.show()
-    #     plt.imshow(soft_label[i, 7, :, :].clone().cpu().numpy())
-    #     plt.show()
-    #     plt.imshow(soft_label[i, 8, :, :].clone().cpu().numpy())
-    #     plt.show()
-    #     plt.imshow(soft_label[i, 9, :, :].clone().cpu().numpy())
-    #     plt.show()
-    #     plt.imshow(soft_label[i, 10, :, :].clone().cpu().numpy())
-    #     plt.show()
-    #     plt.imshow(soft_label[i, 11, :, :].clone().cpu().numpy())
-    #     plt.show()
-    #     plt.imshow(soft_label[i, 12, :, :].clone().cpu().numpy())
-    #     plt.show()
+    for i in range(CAM_NUM):
+        plt.imshow(soft_label[i, 0, :, :].clone().cpu().numpy())
+        plt.show()
+        plt.imshow(soft_label[i, 1, :, :].clone().cpu().numpy())
+        plt.show()
+        plt.imshow(soft_label[i, 2, :, :].clone().cpu().numpy())
+        plt.show()
+        plt.imshow(soft_label[i, 3, :, :].clone().cpu().numpy())
+        plt.show()
+        plt.imshow(soft_label[i, 4, :, :].clone().cpu().numpy())
+        plt.show()
+        plt.imshow(soft_label[i, 5, :, :].clone().cpu().numpy())
+        plt.show()
+        plt.imshow(soft_label[i, 6, :, :].clone().cpu().numpy())
+        plt.show()
+        plt.imshow(soft_label[i, 7, :, :].clone().cpu().numpy())
+        plt.show()
+        plt.imshow(soft_label[i, 8, :, :].clone().cpu().numpy())
+        plt.show()
+        plt.imshow(soft_label[i, 9, :, :].clone().cpu().numpy())
+        plt.show()
+        plt.imshow(soft_label[i, 10, :, :].clone().cpu().numpy())
+        plt.show()
+        plt.imshow(soft_label[i, 11, :, :].clone().cpu().numpy())
+        plt.show()
+        plt.imshow(soft_label[i, 12, :, :].clone().cpu().numpy())
+        plt.show()
 
 
 class DeepLabMultiView(nn.Module):
@@ -71,7 +71,7 @@ class DeepLabMultiView(nn.Module):
 
         self.num_classes = num_classes
 
-    def forward(self, image, pointcloud, label):  # x
+    def forward(self, image, pointcloud=None, label=None):  # x
         """
 
         :param image:
@@ -93,10 +93,14 @@ class DeepLabMultiView(nn.Module):
 
         # predict for each camera
         soft_label_singleview = torch.empty(batch, CAM_NUM, self.num_classes, HEIGHT, WIDTH).cuda()
-        for b in range(batch):
-            x = self.deeplab(image[b, :, :, :, :])  # CAM_NUM x num_class x H x W
-            soft_label_singleview[b, :, :, :, :] = x
-            visualize(image[b, :, :, :, :], x)
+        for camid in range(CAM_NUM):
+            x = self.deeplab(image[:, camid, :, :, :])
+            # print(x.max())
+            # print(x.min())
+            soft_label_singleview[:, camid, :, :, :] = F.softmax(x, dim=1)
+
+        # # visualize
+        # visualize(image[:, camid, :, :, :], soft_label_singleview[:, camid, :, :, :])
 
         # merge the labels
         soft_label_multiview = self.merger(soft_label_singleview, pointcloud, label)

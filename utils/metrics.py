@@ -2,9 +2,14 @@ import numpy as np
 
 
 class Evaluator(object):
-    def __init__(self, num_class):
+    def __init__(self, num_class, weights=None):
         self.num_class = num_class
-        self.confusion_matrix = np.zeros((self.num_class,)*2)
+        if weights is not None:
+            n_c = sum(weights)
+            self.confusion_matrix = np.zeros((n_c,)*2)
+        else:
+            self.confusion_matrix = np.zeros((self.num_class,)*2)
+        self.weights = weights
 
     def Pixel_Accuracy(self):
         Acc = np.diag(self.confusion_matrix).sum() / self.confusion_matrix.sum()
@@ -36,6 +41,8 @@ class Evaluator(object):
         label = self.num_class * gt_image[mask].astype('int') + pre_image[mask]
         count = np.bincount(label, minlength=self.num_class**2)
         confusion_matrix = count.reshape(self.num_class, self.num_class)
+        if self.weights is not None:
+            confusion_matrix = confusion_matrix[self.weights].T[self.weights].T
         return confusion_matrix
 
     def add_batch(self, gt_image, pre_image):
@@ -43,8 +50,10 @@ class Evaluator(object):
         self.confusion_matrix += self._generate_matrix(gt_image, pre_image)
 
     def reset(self):
-        self.confusion_matrix = np.zeros((self.num_class,) * 2)
-
-
+        if self.weights is not None:
+            n_c = sum(self.weights)
+            self.confusion_matrix = np.zeros((n_c,)*2)
+        else:
+            self.confusion_matrix = np.zeros((self.num_class,)*2)
 
 

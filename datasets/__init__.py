@@ -1,5 +1,6 @@
 from datasets import cityscapes, coco, combine_dbs, pascal, sbd, isi
 from datasets import isi
+from datasets import isi_multiview
 from torch.utils.data import DataLoader
 
 def make_data_loader(args, **kwargs):
@@ -41,9 +42,27 @@ def make_data_loader(args, **kwargs):
     elif args.dataset == "camvid":
         raise NotImplementedError
 
-    elif args.dataset == "isi":
+    elif args.dataset == "isi_rgb":
+        train_set = isi.DeepSightRGB(root_dir=args.dataset_dir, split="train")
+        val_set = isi.DeepSightRGB(root_dir=args.dataset_dir, split="validation")
+        num_class = train_set.NUM_CLASSES
+        train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, **kwargs)
+        val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False, **kwargs)
+        test_loader = None
+        return train_loader, val_loader, test_loader, num_class
+
+    elif args.dataset == "isi_intensity":
         train_set = isi.DeepSightDepth(root_dir=args.dataset_dir, split="train")
         val_set = isi.DeepSightDepth(root_dir=args.dataset_dir, split="validation")
+        num_class = train_set.NUM_CLASSES
+        train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, **kwargs)
+        val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False, **kwargs)
+        test_loader = None
+        return train_loader, val_loader, test_loader, num_class
+
+    elif args.dataset == "isi_multiview":
+        train_set = isi_multiview.DeepSightDepthMultiview(root_dir=args.dataset_dir, split="train")
+        val_set = isi_multiview.DeepSightDepthMultiview(root_dir=args.dataset_dir, split="validation")
         num_class = train_set.NUM_CLASSES
         train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, **kwargs)
         val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False, **kwargs)

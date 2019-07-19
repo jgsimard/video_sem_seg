@@ -178,7 +178,7 @@ class SynchronizedBatchNorm1d(_SynchronizedBatchNorm):
 
 
 class SynchronizedBatchNorm2d(_SynchronizedBatchNorm):
-    """Applies Batch Normalization over a 4d input that is seen as a mini-batch
+    r"""Applies Batch Normalization over a 4d input that is seen as a mini-batch
     of 3d inputs
     .. math::
         y = \frac{x - mean[x]}{ \sqrt{Var[x] + \epsilon}} * gamma + beta
