@@ -1,7 +1,7 @@
-import random
-
-import numpy as np
 import torch
+import random
+import numpy as np
+from skimage import transform, filters
 from PIL import Image, ImageOps, ImageFilter
 
 
@@ -16,12 +16,16 @@ class Normalize(object):
         self.mean = mean
         self.std = std
         self.temporal = temporal
+        self.multiview = multiview
 
     def __call__(self, sample):
+        # input is numpy array in CAM_NUM x C x H x W
         img = sample['image']
         mask = sample['label']
+
         img = np.array(img).astype(np.float32)
         mask = np.array(mask).astype(np.float32)
+
         img /= 255.0
         img -= self.mean
         img /= self.std
@@ -31,19 +35,24 @@ class Normalize(object):
             random_image /= 255.0
             random_image -= self.mean
             random_image /= self.std
-        else:
-            random_image = -1
 
         return {'image': img,
                 'label': mask,
                 'random_image': random_image}
 
+        elif self.multiview:
+            pointcloud = sample['pointcloud']
+            return {'image': img,
+                    'label': mask,
+                    'pointcloud': pointcloud}
+
 
 class ToTensor(object):
     """Convert ndarrays in sample to Tensors."""
 
-    def __init__(self, temporal=False):
+    def __init__(self, temporal=False, multiview=False):
         self.temporal = temporal
+        self.multiview = multiview
 
     def __call__(self, sample):
         # swap color axis because
@@ -60,11 +69,18 @@ class ToTensor(object):
         if self.temporal:
             random_image = np.array(sample['random_image']).astype(np.float32).transpose((2, 0, 1))
             random_image = torch.from_numpy(random_image)
-        else:
-            random_image = -1
-        return {'image': img,
-                'label': mask,
-                'random_image': random_image}
+            return {'image': img,
+                    'label': mask,
+                    'random_image': random_image}
+        elif self.multiview:
+            pointcloud = sample['pointcloud']
+            pointcloud = np.array(pointcloud).astype(np.float32).transpose((0, 2, 1))
+            pointcloud = torch.from_numpy(pointcloud).float()
+            return {'image': img,
+                    'label': mask,
+                    'pointcloud': pointcloud}
+
+
 
 
 class RandomHorizontalFlip(object):
@@ -74,11 +90,11 @@ class RandomHorizontalFlip(object):
     def __call__(self, sample):
         img = sample['image']
         mask = sample['label']
-        random_image = sample['random_image'] if self.temporal else -1
+        random_image = sample['random_image'] if self.temporal else None
         if random.random() < 0.5:
             img = img.transpose(Image.FLIP_LEFT_RIGHT)
             mask = mask.transpose(Image.FLIP_LEFT_RIGHT)
-            random_image = random_image.transpose(Image.FLIP_LEFT_RIGHT) if self.temporal else -1
+            random_image = random_image.transpose(Image.FLIP_LEFT_RIGHT) if self.temporal else None
         return {'image': img,
                 'label': mask,
                 'random_image': random_image}
@@ -91,15 +107,89 @@ class RandomVerticalFlip(object):
     def __call__(self, sample):
         img = sample['image']
         mask = sample['label']
-        random_image = sample['random_image'] if self.temporal else -1
+        random_image = sample['random_image'] if self.temporal else None
         if random.random() < 0.5:
             img = img.transpose(Image.FLIP_TOP_BOTTOM)
             mask = mask.transpose(Image.FLIP_TOP_BOTTOM)
-            random_image = random_image.transpose(Image.FLIP_TOP_BOTTOM) if self.temporal else -1
+            random_image = random_image.transpose(Image.FLIP_TOP_BOTTOM) if self.temporal else None
 
         return {'image': img,
                 'label': mask,
                 'random_image': random_image}
+
+
+class RandomHorizontalFlipMultiView(object):
+    def __init__(self, p=0.5):
+        self.p = p
+
+    def __call__(self, sample):
+        # input is tensor in B x C x H x W
+        img = sample['image']
+        label = sample['label']
+
+        if random.random() < self.p:
+            img = torch.flip(img, dims=[-1])
+            label = torch.flip(label, dims=[-1])
+
+        return {'image': img,
+                'label': label}
+
+
+class RandomRotateMultiview(object):
+    def __init__(self, degree, p=0.5):
+        self.degree = degree
+        self.p = p
+
+    def __call__(self, sample):
+        # input is tensor in B x C x H x W
+        img = sample['image'].cpu().numpy()
+        mask = sample['label'].cpu().numpy()
+        batch = img.shape[0]
+        channel = img.shape[1]
+        rotate_degree = random.uniform(-1 * self.degree, self.degree)
+
+        if random.random() < self.p:
+            for b in range(batch):
+                mask[b, :, :] = transform.rotate(mask[b, :, :], rotate_degree, mode='constant', preserve_range=True)
+
+                for c in range(channel):
+                    img[b, c, :, :] = transform.rotate(img[b, c, :, :], rotate_degree, mode='constant')
+
+        return {'image': torch.tensor(img).cuda(),
+                'label': torch.tensor(mask).cuda()}
+
+
+class RandomGaussianBlurMultiview(object):
+    def __init__(self, p=0.5):
+        self.p = p
+
+    def __call__(self, sample):
+        img = sample['image'].cpu().numpy()
+        mask = sample['label'].cpu().numpy()
+        batch = img.shape[0]
+        channel = img.shape[1]
+
+        if random.random() < self.p:
+            for b in range(batch):
+                for c in range(channel):
+                    img[b, c, :, :] = filters.gaussian(img[b, c, :, :], sigma=random.random())
+
+        return {'image': torch.tensor(img).cuda(),
+                'label': torch.tensor(mask).cuda()}
+
+
+class RandomDropOut(object):
+    def __init__(self, p=0.5):
+        self.p = p
+
+    def __call__(self, feature_in, CAM_NUM):
+        # input is B x CAM_NUM x C x H x W
+
+        for camid in range(1, CAM_NUM):
+            if random.random() < self.p:
+                feature_in[:, camid, :, :, :] = 0
+
+        return feature_in
 
 
 class RandomRotate(object):
@@ -110,11 +200,11 @@ class RandomRotate(object):
     def __call__(self, sample):
         img = sample['image']
         mask = sample['label']
-        random_image = sample['random_image'] if self.temporal else -1
+        random_image = sample['random_image'] if self.temporal else None
         rotate_degree = random.uniform(-1 * self.degree, self.degree)
         img = img.rotate(rotate_degree, Image.BILINEAR)
         mask = mask.rotate(rotate_degree, Image.NEAREST)
-        random_image = random_image.rotate(rotate_degree, Image.BILINEAR) if self.temporal else -1
+        random_image = random_image.rotate(rotate_degree, Image.BILINEAR) if self.temporal else None
 
         return {'image': img,
                 'label': mask,
@@ -128,11 +218,11 @@ class RandomGaussianBlur(object):
     def __call__(self, sample):
         img = sample['image']
         mask = sample['label']
-        random_image = sample['random_image'] if self.temporal else -1
+        random_image = sample['random_image'] if self.temporal else None
         if random.random() < 0.5:
             img = img.filter(ImageFilter.GaussianBlur(radius=random.random()))
             random_image = random_image.filter(
-                ImageFilter.GaussianBlur(radius=random.random())) if self.temporal else -1
+                ImageFilter.GaussianBlur(radius=random.random())) if self.temporal else None
 
         return {'image': img,
                 'label': mask,
@@ -186,7 +276,7 @@ class RandomScaleCrop(object):
                 random_image = ImageOps.expand(random_image, border=(0, 0, padw, padh), fill=0)
             random_image = random_image.crop((x1, y1, x1 + self.crop_size[1], y1 + self.crop_size[0]))
         else:
-            random_image = -1
+            random_image = None
 
         return {'image': img,
                 'label': mask,
@@ -194,7 +284,7 @@ class RandomScaleCrop(object):
 
 
 class FixScaleCrop(object):
-    def __init__(self, crop_size, temporal=False):
+    def __init__(self, crop_size, temporal):
         self.crop_size = crop_size
         self.temporal = temporal
 
@@ -215,18 +305,13 @@ class FixScaleCrop(object):
         x1 = int(round((w - self.crop_size) / 2.))
         y1 = int(round((h - self.crop_size) / 2.))
         img = img.crop((x1, y1, x1 + self.crop_size, y1 + self.crop_size))
-
-        # # TO REMOVE !!!!!!!!!!!!!!!!!!!
-        # img = img.transpose(Image.FLIP_TOP_BOTTOM)
-        # ###############################
-
         mask = mask.crop((x1, y1, x1 + self.crop_size, y1 + self.crop_size))
         if self.temporal:
             random_image = sample['random_image']
             random_image = random_image.resize((ow, oh), Image.BILINEAR)
             random_image = random_image.crop((x1, y1, x1 + self.crop_size, y1 + self.crop_size))
         else:
-            random_image = -1
+            random_image = None
 
         return {'image': img,
                 'label': mask,
