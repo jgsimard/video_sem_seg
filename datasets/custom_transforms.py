@@ -32,7 +32,7 @@ class Normalize(object):
             random_image -= self.mean
             random_image /= self.std
         else:
-            random_image = None
+            random_image = -1
 
         return {'image': img,
                 'label': mask,
@@ -61,7 +61,7 @@ class ToTensor(object):
             random_image = np.array(sample['random_image']).astype(np.float32).transpose((2, 0, 1))
             random_image = torch.from_numpy(random_image)
         else:
-            random_image = None
+            random_image = -1
         return {'image': img,
                 'label': mask,
                 'random_image': random_image}
@@ -74,11 +74,11 @@ class RandomHorizontalFlip(object):
     def __call__(self, sample):
         img = sample['image']
         mask = sample['label']
-        random_image = sample['random_image'] if self.temporal else None
+        random_image = sample['random_image'] if self.temporal else -1
         if random.random() < 0.5:
             img = img.transpose(Image.FLIP_LEFT_RIGHT)
             mask = mask.transpose(Image.FLIP_LEFT_RIGHT)
-            random_image = random_image.transpose(Image.FLIP_LEFT_RIGHT) if self.temporal else None
+            random_image = random_image.transpose(Image.FLIP_LEFT_RIGHT) if self.temporal else -1
         return {'image': img,
                 'label': mask,
                 'random_image': random_image}
@@ -91,11 +91,11 @@ class RandomVerticalFlip(object):
     def __call__(self, sample):
         img = sample['image']
         mask = sample['label']
-        random_image = sample['random_image'] if self.temporal else None
+        random_image = sample['random_image'] if self.temporal else -1
         if random.random() < 0.5:
             img = img.transpose(Image.FLIP_TOP_BOTTOM)
             mask = mask.transpose(Image.FLIP_TOP_BOTTOM)
-            random_image = random_image.transpose(Image.FLIP_TOP_BOTTOM) if self.temporal else None
+            random_image = random_image.transpose(Image.FLIP_TOP_BOTTOM) if self.temporal else -1
 
         return {'image': img,
                 'label': mask,
@@ -110,11 +110,11 @@ class RandomRotate(object):
     def __call__(self, sample):
         img = sample['image']
         mask = sample['label']
-        random_image = sample['random_image'] if self.temporal else None
+        random_image = sample['random_image'] if self.temporal else -1
         rotate_degree = random.uniform(-1 * self.degree, self.degree)
         img = img.rotate(rotate_degree, Image.BILINEAR)
         mask = mask.rotate(rotate_degree, Image.NEAREST)
-        random_image = random_image.rotate(rotate_degree, Image.BILINEAR) if self.temporal else None
+        random_image = random_image.rotate(rotate_degree, Image.BILINEAR) if self.temporal else -1
 
         return {'image': img,
                 'label': mask,
@@ -128,11 +128,11 @@ class RandomGaussianBlur(object):
     def __call__(self, sample):
         img = sample['image']
         mask = sample['label']
-        random_image = sample['random_image'] if self.temporal else None
+        random_image = sample['random_image'] if self.temporal else -1
         if random.random() < 0.5:
             img = img.filter(ImageFilter.GaussianBlur(radius=random.random()))
             random_image = random_image.filter(
-                ImageFilter.GaussianBlur(radius=random.random())) if self.temporal else None
+                ImageFilter.GaussianBlur(radius=random.random())) if self.temporal else -1
 
         return {'image': img,
                 'label': mask,
@@ -186,7 +186,7 @@ class RandomScaleCrop(object):
                 random_image = ImageOps.expand(random_image, border=(0, 0, padw, padh), fill=0)
             random_image = random_image.crop((x1, y1, x1 + self.crop_size[1], y1 + self.crop_size[0]))
         else:
-            random_image = None
+            random_image = -1
 
         return {'image': img,
                 'label': mask,
@@ -194,7 +194,7 @@ class RandomScaleCrop(object):
 
 
 class FixScaleCrop(object):
-    def __init__(self, crop_size, temporal):
+    def __init__(self, crop_size, temporal=False):
         self.crop_size = crop_size
         self.temporal = temporal
 
@@ -215,13 +215,18 @@ class FixScaleCrop(object):
         x1 = int(round((w - self.crop_size) / 2.))
         y1 = int(round((h - self.crop_size) / 2.))
         img = img.crop((x1, y1, x1 + self.crop_size, y1 + self.crop_size))
+
+        # # TO REMOVE !!!!!!!!!!!!!!!!!!!
+        # img = img.transpose(Image.FLIP_TOP_BOTTOM)
+        # ###############################
+
         mask = mask.crop((x1, y1, x1 + self.crop_size, y1 + self.crop_size))
         if self.temporal:
             random_image = sample['random_image']
             random_image = random_image.resize((ow, oh), Image.BILINEAR)
             random_image = random_image.crop((x1, y1, x1 + self.crop_size, y1 + self.crop_size))
         else:
-            random_image = None
+            random_image = -1
 
         return {'image': img,
                 'label': mask,
@@ -241,6 +246,11 @@ class FixedResize(object):
 
         img = img.resize(self.size, Image.BILINEAR)
         mask = mask.resize(self.size, Image.NEAREST)
+
+        if self.temporal:
+            random_image = sample['random_image'].resize(self.size, Image.BILINEAR)
+        else:
+            random_image = -1
 
         return {'image': img,
                 'label': mask,

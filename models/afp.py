@@ -115,13 +115,14 @@ class AdaptiveFeaturePropagation(nn.Module):
 #         return x
 
 class LowLatencyModel(nn.Module):
-    def __init__(self, s_l, s_h, output_net, threshold = 0.3):
+    def __init__(self, deeplab, threshold = 0.3):
         super(LowLatencyModel, self).__init__()
         self.adaptive_feature_propagation = AdaptiveFeaturePropagation()
         self.adaptive_key_frame_selector = AdaptiveKeyFrameSelector()
-        self.s_l = s_l
-        self.s_h = s_h
-        self.output_net = output_net
+        self.deeplab = deeplab
+        # self.s_l = s_l
+        # self.s_h = s_h
+        # self.output_net = output_net
 
         self.key_frame_low_features = None
         self.key_frame_high_features = None

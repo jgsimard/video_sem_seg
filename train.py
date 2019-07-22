@@ -8,7 +8,6 @@ import torch
 from mypath import Path
 from datasets import make_data_loader
 from models.modeling.sync_batchnorm.replicate import patch_replication_callback
-# from models.modeling.deeplab import *
 from models.modeling.deeplab import DeepLab
 from utils.loss import SegmentationLosses
 from utils.calculate_weights import calculate_weigths_labels
@@ -267,6 +266,9 @@ class Trainer(object):
             self.writer.add_scalar('val/fwIoU_crf', FWIoU_crf, epoch)
             print('Validation_crf:')
             print("Acc:{}, Acc_class:{}, mIoU:{}, fwIoU: {}".format(Acc_crf, Acc_class_crf, mIoU_crf, FWIoU_crf))
+
+        # print(self.evaluator.confusion_matrix)
+        # print(self.evaluator_crf.confusion_matrix)
 
         new_pred = mIoU_crf if self.crf is not None else mIoU
         if new_pred > self.best_pred:

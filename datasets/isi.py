@@ -154,8 +154,6 @@ class DeepSightTemporalRGB(Dataset):
         return sample
 
 
-
-
 def pointcloud_reader(name, pointcloud_format='xyz',  pointcloud_dtype=np.float32):
     with open(name, 'rb') as f:
         plydata = PlyData.read(f)
@@ -250,6 +248,7 @@ if __name__ == "__main__":
     # print(len(rgb_dataset))
     # for i in range(len(rgb_dataset)):
     #     sample = rgb_dataset[i]
+    #     print(sample)
     #     img = sample['image']
     #     label = sample['label']
     #     print(i, img.shape, label.shape, np.unique(label))
@@ -261,8 +260,6 @@ if __name__ == "__main__":
     #
     #     break
     #
-    # rgb_dataset = DeepSightRGB(root_dir, set)
-    #
     # dataloader = DataLoader(rgb_dataset,
     #                         batch_size=4,
     #                         shuffle=True,
@@ -273,60 +270,59 @@ if __name__ == "__main__":
     #     break
 
     print("Testing Depth dataset")
-    # # root_dir = "/home/deepsight/data/sem_seg_07_10_2019"
-    # root_dir = "/home/deepsight/data/sem_seg_multiview_07_10_2019"
-    # # split = "validation"
-    # split = "train"
-    # depth_dataset = DeepSightDepth(root_dir, split)
-    # print(len(depth_dataset))
-    # fig = plt.figure()
-    # n = np.zeros(13)
-    # for i in range(len(depth_dataset)):
-    #     sample = depth_dataset[i]
-    #     # print(sample)
-    #     img = sample['image']
-    #     # depth = sample['depth']
-    #     label = sample['label']
-    #     # pc = sample['pointcloud']
-    #     uniques = np.unique(label).astype(int)
-    #     n[uniques] +=1
-    #     print(n)
-    #     # print(i, img.size(), label.size(), uniques)
-    #     # print(i, img.size, label.size, pc.shape, np.unique(label))
-    #     print(np.asarray(img).min(), np.asarray(img).max())
-    #
-    #     # plt.imshow(np.transpose(np.asarray(img), (1, 2, 0)))
-    #     # plt.imshow(np.asarray(img))
-    #     plt.imshow(np.asarray(img)[0,:,:], cmap='gray')
-    #     plt.title("img")
-    #     plt.show()
-    #     #
-    #     # # plt.imshow(depth)
-    #     # # plt.title("depth")
-    #     # # plt.show()
-    #     #
-    #     plt.imshow(sample['label'])
-    #     plt.title("mask")
-    #     plt.show()
-    #
-    #     # for j in range(4):
-    #     #     plt.imshow(pc[j,:,:])
-    #     #     plt.show()
-    #     #
-    #     # depth_array = np.asarray(depth)
-    #     # print(np.asarray(label).max())
-    #     break
+    root_dir = "/home/deepsight/data/sem_seg_07_10_2019"
+    # split = "validation"
+    split = "train"
+    depth_dataset = DeepSightDepth(root_dir, split)
+    print(len(depth_dataset))
+    fig = plt.figure()
+    n = np.zeros(13)
+    for i in range(len(depth_dataset)):
+        sample = depth_dataset[i]
+        # print(sample)
+        img = sample['image']
+        # depth = sample['depth']
+        label = sample['label']
+        # pc = sample['pointcloud']
+        uniques = np.unique(label).astype(int)
+        n[uniques] +=1
+        print(n)
+        # print(i, img.size(), label.size(), uniques)
+        # print(i, img.size, label.size, pc.shape, np.unique(label))
+        print(np.asarray(img).min(), np.asarray(img).max())
+
+        # plt.imshow(np.transpose(np.asarray(img), (1, 2, 0)))
+        # plt.imshow(np.asarray(img))
+        plt.imshow(np.asarray(img)[0,:,:], cmap='gray')
+        plt.title("img")
+        plt.show()
+        #
+        # # plt.imshow(depth)
+        # # plt.title("depth")
+        # # plt.show()
+        #
+        plt.imshow(sample['label'])
+        plt.title("mask")
+        plt.show()
+
+        # for j in range(4):
+        #     plt.imshow(pc[j,:,:])
+        #     plt.show()
+        #
+        # depth_array = np.asarray(depth)
+        # print(np.asarray(label).max())
+        break
 
     print("Testing Temporal RGB dataset")
-    root_dir = "/home/deepsight/data/rgb"
-    set = "train"
-    rgb_dataset = DeepSightTemporalRGB(root_dir, set)
-    fig = plt.figure()
-    print(len(rgb_dataset))
-    for i in range(len(rgb_dataset)):
-        sample = rgb_dataset[i]
-        img = sample['image']
-        label = sample['label']
-        print(i, img.shape, label.shape, np.unique(label))
+    # root_dir = "/home/deepsight/data/rgb"
+    # set = "train"
+    # rgb_dataset = DeepSightTemporalRGB(root_dir, set)
+    # fig = plt.figure()
+    # print(len(rgb_dataset))
+    # for i in range(len(rgb_dataset)):
+    #     sample = rgb_dataset[i]
+    #     img = sample['image']
+    #     label = sample['label']
+    #     print(i, img.shape, label.shape, np.unique(label))
 
 
