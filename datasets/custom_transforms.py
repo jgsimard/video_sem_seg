@@ -12,7 +12,7 @@ class Normalize(object):
         std (tuple): standard deviations for each channel.
     """
 
-    def __init__(self, mean=(0., 0., 0.), std=(1., 1., 1.), temporal=False):
+    def __init__(self, mean=(0., 0., 0.), std=(1., 1., 1.), temporal=False, multiview=False):
         self.mean = mean
         self.std = std
         self.temporal = temporal
@@ -36,9 +36,9 @@ class Normalize(object):
             random_image -= self.mean
             random_image /= self.std
 
-        return {'image': img,
-                'label': mask,
-                'random_image': random_image}
+            return {'image': img,
+                    'label': mask,
+                    'random_image': random_image}
 
         elif self.multiview:
             pointcloud = sample['pointcloud']

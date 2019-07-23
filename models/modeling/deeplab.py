@@ -37,7 +37,17 @@ class DeepLab(nn.Module):
         return low_level_feat
 
     def forward_high(self, low_level_feat, output_shape):
-        x = self.backbone(low_level_feat)
+        x = self.backbone.forward_high(low_level_feat)
+        x = self.aspp(x)
+        return x
+
+    def forward_decode(self, low_level_feat, high_level_feat, output_shape):
+        x = self.decoder(high_level_feat, low_level_feat)
+        x = F.interpolate(x, size=output_shape, mode='bilinear', align_corners=True)
+        return x
+
+    def forward_high_decode(self, low_level_feat, output_shape):
+        x = self.backbone.forward_high(low_level_feat)
         x = self.aspp(x)
         x = self.decoder(x, low_level_feat)
         x = F.interpolate(x, size=output_shape, mode='bilinear', align_corners=True)
