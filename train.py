@@ -18,29 +18,6 @@ from utils.metrics import Evaluator
 
 import models.convcrf as convcrf
 
-def onehot(targets, num_classes):
-    """Origin: https://github.com/moskomule/mixup.pytorch
-    convert index tensor into onehot tensor
-    :param targets: index tensor
-    :param num_classes: number of classes
-    """
-    # assert isinstance(targets, torch.LongTensor)
-    return torch.zeros(targets.size()[0], num_classes).scatter_(1, targets.view(-1, 1), 1)
-
-def mixup(inputs, targets, num_classes, alpha=0.4):
-    """Mixup on 1x32x32 mel-spectrograms.
-    """
-    s = inputs.size()[0]
-    weight = torch.Tensor(np.random.beta(alpha, alpha, s))
-    index = np.random.permutation(s)
-    x1, x2 = inputs, inputs[index, :, :, :]
-    y1, y2 = onehot(targets, num_classes), onehot(targets[index,], num_classes)
-    weight = weight.view(s, 1, 1, 1)
-    inputs = weight*x1 + (1-weight)*x2
-    weight = weight.view(s, 1)
-    targets = weight*y1 + (1-weight)*y2
-    return inputs, targets
-
 class Trainer(object):
     def __init__(self, args):
         self.args = args
@@ -87,12 +64,13 @@ class Trainer(object):
         # Define Criterion
         # whether to use class balanced weights
         if args.use_balanced_weights:
-            classes_weights_path = os.path.join(Path.db_root_dir(args.dataset), args.dataset + '_classes_weights.npy')
+            classes_weights_path = os.path.join(args.dataset_dir, 'classes_weights.npy')
             if os.path.isfile(classes_weights_path):
                 weight = np.load(classes_weights_path)
             else:
-                weight = calculate_weigths_labels(args.dataset, self.train_loader, self.nclass)
+                weight = calculate_weigths_labels(args.dataset_dir, self.train_loader, self.nclass)
             weight = torch.from_numpy(weight.astype(np.float32))
+            print(f"Classes weights : {weight}")
         else:
             weight = None
         self.criterion = SegmentationLosses(weight=weight, cuda=args.cuda).build_loss(mode=args.loss_type)
@@ -168,8 +146,8 @@ class Trainer(object):
                 continue
             if self.args.cuda:
                 image, target = image.cuda(), target.cuda()
-            if self.args.loss_type == 'cem':
-                image, target = mixup(image, onehot(target, 11), 11, alpha=0.4)
+            # if self.args.loss_type == 'cem':
+            #     image, target = mixup(image, onehot(target, 11), 11, alpha=0.4)
             self.scheduler(self.optimizer, i, epoch, self.best_pred)
             self.optimizer.zero_grad()
             output = self.model(image)
@@ -480,8 +458,10 @@ def get_args():
 
 
 def main():
+    os.environ["CUDA_VISIBLE_DEVICES"]="1,2,3"
     args = get_args()
     print(args)
+    print(torch.cuda.current_device())
     torch.manual_seed(args.seed)
     trainer = Trainer(args)
     print('Starting Epoch:', trainer.args.start_epoch)
