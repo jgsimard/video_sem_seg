@@ -120,8 +120,11 @@ class UNet(nn.Module):
 
 if __name__ == '__main__':
     import torch
+    import torchsummary
 
-    model = UNet(n_channels=(13 + 1) * 4, n_classes=13)
+    model = UNet(n_channels=(13 + 1) * 4, n_classes=13).cuda()
+
+    torchsummary.summary(model, ((13 + 1) * 4, 287, 352))
 
     feat = torch.rand([4, (13 + 1) * 4, 287, 352])
 

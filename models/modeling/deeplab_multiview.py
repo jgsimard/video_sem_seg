@@ -109,14 +109,19 @@ class DeepLabMultiView(nn.Module):
             # visualize(image[b, :, :, :, :], x)
 
         # merge the labels
-        soft_label_multiview = self.merger(soft_label_singleview, pointcloud, label)
+        soft_label_multiview, label = self.merger(soft_label_singleview, pointcloud, label)
 
-        return soft_label_singleview, soft_label_multiview
+        return soft_label_singleview, soft_label_multiview, label
 
 
 if __name__ == "__main__":
-    model = DeepLabMultiView(backbone='resnet', output_stride=16, num_classes=13)
+    import torchsummary
+
+    model = DeepLabMultiView(backbone='resnet', output_stride=16, num_classes=13).cuda()
     model.eval()
+
+    torchsummary.summary(model.deeplab, (3, 287, 352))
+
     batch = 1
     image = torch.rand(batch, 4, 3, 287, 352)
     pointcloud = torch.rand(batch, 4, 3, 287, 352)

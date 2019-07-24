@@ -9,10 +9,11 @@ import matplotlib.pyplot as plt
 from models.modeling.sync_batchnorm.batchnorm import SynchronizedBatchNorm2d
 
 from torchvision import transforms
-from datasets import custom_transforms as tr
+from datasets.custom_transform_multichannel import ToNumpy, ToTensor, RandomDropOut
 from datasets.multiview_info import *
 
 from models.modeling.unet_model import UNet
+import albumentations as aug
 
 
 def project_point_cloud(xyz_pts, feature_src, cam_intrinsics_target, flip_horizontally=0, flip_vertically=1):
@@ -133,12 +134,11 @@ class Merger(nn.Module):
         self.unet = UNet(n_channels=(self.num_classes + 1) * CAM_NUM, n_classes=self.num_classes)
         self._init_weight()
 
-        self.drop_out = tr.RandomDropOut(p=0.5)
+        self.transform_train = aug.Compose([
+            aug.HorizontalFlip(p=0.7),
+            aug.ShiftScaleRotate(p=0.7, rotate_limit=30),
+            aug.OneOf([aug.Blur(p=0.5, blur_limit=5), aug.GaussNoise(p=0.5)])
 
-        self.transform_train = transforms.Compose([
-            tr.RandomHorizontalFlipMultiView(p=0.7),
-            tr.RandomRotateMultiview(p=0.7, degree=45),
-            tr.RandomGaussianBlurMultiview(p=0.7)
         ])
 
         self.scale = 10.0
@@ -191,19 +191,22 @@ class Merger(nn.Module):
 
             # TODO: dropout
             # if self.training:
-            #     feature_tmp_projected = self.drop_out(feature_tmp_projected, CAM_NUM)
+            #     for b in range(batch):
+            #        feature_tmp_projected[b, :, :, :, :] = RandomDropOut(feature_tmp_projected[b, :, :, :, :], CAM_NUM,
+                                                                         p=0.5)
 
             # reformat the tensor to become BxCAM_NUM*(C+1)xHxW for network to process
             feature_target = feature_tmp_projected.view(batch, -1, HEIGHT, WIDTH).cuda()  # B x C x H x W
 
-            # TODO: augmentation
-            # # augmentation
+            # # TODO: augmentation
             # if self.training:
             #     # only transform the label for the current camera
-            #     sample = self.transform_train({'image': feature_target, 'label': label[:, camid_target, :, :]})
+            #     sample = ToNumpy({'image': feature_target, 'label': label[:, camid_target, :, :]})
+            #     sample = self.transform_train({'image': sample['image'], 'label': sample['label']})
+            #     sample = ToTensor(sample, batch=batch, channel=CAM_NUM * (self.num_classes + 1))
             #     feature_target = sample['image']
             #     label[:, camid_target, :, :] = sample['label']
-
+            #
             # # some visualization
             # plt.imshow(label[0, camid_target, :, :].clone().cpu().data)
             # plt.title('label')
@@ -224,7 +227,7 @@ class Merger(nn.Module):
             # go through network
             soft_label[:, camid_target, :, :, :] = self.unet(feature_target)
 
-        return soft_label
+        return soft_label, label
 
     def _init_weight(self):
         for m in self.modules():

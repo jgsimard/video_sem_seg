@@ -81,55 +81,6 @@ class ToTensor(object):
                     'pointcloud': pointcloud}
 
 
-# class ToTensor(object):
-#     """Convert ndarrays in sample to Tensors."""
-#
-#     def __call__(self, sample):
-#         sample['image'] = torch.from_numpy(sample['image']).float()
-#         sample['depth'] = torch.from_numpy(sample['depth']).float()
-#         sample['label'] = torch.from_numpy(sample['label']).float()
-#         sample['pointcloud'] = torch.from_numpy(sample['pointcloud']).float()
-#
-#         return sample
-
-
-# class ToNumpy(object):
-#     """Convert tensor to ndarrays"""
-#
-#     def __call__(self, sample):
-#         sample['image'] = sample['image'].cpu().numpy()
-#         sample['depth'] = sample['depth'].cpu().numpy()
-#         sample['label'] = sample['label'].cpu().numpy()
-#         sample['pointcloud'] = sample['pointcloud'].cpu().numpy()
-#
-#         return sample
-
-
-# class ToPILImage(object):
-#     """Convert tensor to PIL list of images"""
-#
-#     def __call__(self, sample):
-#         # img is tensor in B x C x H x W
-#         # mask is tensor in B x H x W
-#
-#         img = sample["image"]
-#         mask = sample["label"]
-#
-#         batch = img.shape[0]
-#         channel = img.shape[1]
-#
-#         img_PIL = [None] * batch
-#         mask_PIL = [None] * batch
-#         for b in batch:
-#             mask_PIL = Image.fromarray(mask[b, :, :].numpy)
-#             img_PIL = [None] * channel
-#             for c in channel:
-#                 img_PIL = Image.fromarray(img[b, c, :, :].numpy)
-#
-#         return {'image': img_PIL,
-#                 'label': mask_PIL}
-
-
 class RandomHorizontalFlip(object):
     def __init__(self, temporal=False):
         self.temporal = temporal
@@ -145,6 +96,7 @@ class RandomHorizontalFlip(object):
         return {'image': img,
                 'label': mask,
                 'random_image': random_image}
+
 
 class RandomVerticalFlip(object):
     def __init__(self, temporal=False):
@@ -162,80 +114,6 @@ class RandomVerticalFlip(object):
         return {'image': img,
                 'label': mask,
                 'random_image': random_image}
-
-
-class RandomHorizontalFlipMultiView(object):
-    def __init__(self, p=0.5):
-        self.p = p
-
-    def __call__(self, sample):
-        # input is tensor in B x C x H x W
-        img = sample['image']
-        label = sample['label']
-
-        if random.random() < self.p:
-            img = torch.flip(img, dims=[-1])
-            label = torch.flip(label, dims=[-1])
-
-        return {'image': img,
-                'label': label}
-
-
-class RandomRotateMultiview(object):
-    def __init__(self, degree, p=0.5):
-        self.degree = degree
-        self.p = p
-
-    def __call__(self, sample):
-        # input is tensor in B x C x H x W
-        img = sample['image'].cpu().numpy()
-        mask = sample['label'].cpu().numpy()
-        batch = img.shape[0]
-        channel = img.shape[1]
-        rotate_degree = random.uniform(-1 * self.degree, self.degree)
-
-        if random.random() < self.p:
-            for b in range(batch):
-                mask[b, :, :] = transform.rotate(mask[b, :, :], rotate_degree, mode='constant', preserve_range=True)
-
-                for c in range(channel):
-                    img[b, c, :, :] = transform.rotate(img[b, c, :, :], rotate_degree, mode='constant')
-
-        return {'image': torch.tensor(img).cuda(),
-                'label': torch.tensor(mask).cuda()}
-
-
-class RandomGaussianBlurMultiview(object):
-    def __init__(self, p=0.5):
-        self.p = p
-
-    def __call__(self, sample):
-        img = sample['image'].cpu().numpy()
-        mask = sample['label'].cpu().numpy()
-        batch = img.shape[0]
-        channel = img.shape[1]
-
-        if random.random() < self.p:
-            for b in range(batch):
-                for c in range(channel):
-                    img[b, c, :, :] = filters.gaussian(img[b, c, :, :], sigma=random.random())
-
-        return {'image': torch.tensor(img).cuda(),
-                'label': torch.tensor(mask).cuda()}
-
-
-class RandomDropOut(object):
-    def __init__(self, p=0.5):
-        self.p = p
-
-    def __call__(self, feature_in, CAM_NUM):
-        # input is B x CAM_NUM x C x H x W
-
-        for camid in range(1, CAM_NUM):
-            if random.random() < self.p:
-                feature_in[:, camid, :, :, :] = 0
-
-        return feature_in
 
 
 class RandomRotate(object):

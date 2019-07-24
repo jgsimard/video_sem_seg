@@ -13,6 +13,8 @@ python train_multiview.py --backbone resnet \
                 --dataset_dir /home/deepsight3/dev/deepsight/MultiView/data \
                 --path_pretrained_model /home/deepsight3/dev/deepsight/MultiView/script/video_sem_seg_multiview/model_best_multiview.pth.tar \
                 --lr_scheduler poly\
+                --optimizer Adam \
+                --adversarial_loss True \
 
 #                --resume /home/deepsight3/dev/deepsight/MultiView/script/video_sem_seg/run/isi/deeplab-multiview-relufeature/experiment_0/checkpoint.pth.tar \
 #                --GaussCrf
