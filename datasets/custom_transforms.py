@@ -35,16 +35,19 @@ class Normalize(object):
             random_image /= 255.0
             random_image -= self.mean
             random_image /= self.std
+        else:
+            random_image = -1
 
-            return {'image': img,
-                    'label': mask,
-                    'random_image': random_image}
-
-        elif self.multiview:
+        if self.multiview:
             pointcloud = sample['pointcloud']
-            return {'image': img,
-                    'label': mask,
-                    'pointcloud': pointcloud}
+
+        else:
+            pointcloud = -1
+
+        return {'image': img,
+                'label': mask,
+                'random_image': random_image,
+                'pointcloud': pointcloud}
 
 
 class ToTensor(object):
@@ -69,16 +72,20 @@ class ToTensor(object):
         if self.temporal:
             random_image = np.array(sample['random_image']).astype(np.float32).transpose((2, 0, 1))
             random_image = torch.from_numpy(random_image)
-            return {'image': img,
-                    'label': mask,
-                    'random_image': random_image}
-        elif self.multiview:
+        else:
+            random_image = -1
+
+        if self.multiview:
             pointcloud = sample['pointcloud']
             pointcloud = np.array(pointcloud).astype(np.float32).transpose((0, 2, 1))
             pointcloud = torch.from_numpy(pointcloud).float()
-            return {'image': img,
-                    'label': mask,
-                    'pointcloud': pointcloud}
+        else:
+            pointcloud = -1
+
+        return {'image': img,
+                'label': mask,
+                'random_image': random_image,
+                'pointcloud': pointcloud}
 
 
 
@@ -284,7 +291,7 @@ class RandomScaleCrop(object):
 
 
 class FixScaleCrop(object):
-    def __init__(self, crop_size, temporal):
+    def __init__(self, crop_size, temporal=False):
         self.crop_size = crop_size
         self.temporal = temporal
 
@@ -312,7 +319,6 @@ class FixScaleCrop(object):
             random_image = random_image.crop((x1, y1, x1 + self.crop_size, y1 + self.crop_size))
         else:
             random_image = None
-
         return {'image': img,
                 'label': mask,
                 'random_image': random_image}
