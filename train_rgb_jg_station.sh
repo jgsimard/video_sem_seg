@@ -2,16 +2,17 @@
 CUDA_VISIBLE_DEVICES=1;
 python train.py --backbone resnet \
                 --lr 0.0007 \
-                --workers 32 \
+                --workers 4 \
                 --batch-size 16 \
                 --gpu-ids 0\
-                --checkname deeplab-resnet \
+                --checkname deeplab-resnet-unbalenced-adv \
                 --eval-interval 1 \
                 --dataset isi_rgb \
                 --epochs 200 \
-                --dataset_dir /home/deepsight/data/rgb \
-                --use-balanced-weights \
-                --resume /home/deepsight/video_sem_seg/run/isi_rgb/deeplab-resnet/experiment_1/checkpoint.pth.tar
+                --dataset_dir /home/deepsight2/development/data/rgb \
+                --optimizer Adam \
+                --adversarial_loss
+
 #                --out-stride 8 \
 #                --GaussCrf \
 #                --TrainCrf

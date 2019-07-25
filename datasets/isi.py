@@ -303,9 +303,7 @@ if __name__ == "__main__":
         sample = depth_dataset[i]
         # print(sagit mple)
         img = sample['image']
-        # depth = sample['depth']
         label = sample['label']
-        # pc = sample['pointcloud']
         uniques = np.unique(label).astype(int)
         n[uniques] += 1
         print(n)
