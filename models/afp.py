@@ -129,7 +129,7 @@ class LowLatencyModel(nn.Module):
         return torch.einsum('bhw->b', [torch.eq(seg_map_1, seg_map_2)]) / (h * w)
 
     def forward_train(self, input, random_input):
-        random_frame_low_features = self.deeplab.forward_low(random_input)
+        random_frame_low_features = self.deeplab.module.forward_low(random_input)
         self.forward_deeplab(random_frame_low_features)
         cur_frame_low_features = self.deeplab.forward_low(input)
 

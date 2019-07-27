@@ -23,7 +23,7 @@ import models.convcrf as convcrf
 
 class TemporalTrainer(Trainer):
     def __init__(self, args):
-        Trainer.__init__(args=args)
+        Trainer.__init__(self, args=args)
         self.temporal_model = LowLatencyModel(self.model)
 
         # Fix deeplab as the features extractor
@@ -43,6 +43,7 @@ class TemporalTrainer(Trainer):
             self.scheduler(self.optimizer, i, epoch, self.best_pred)
             self.optimizer.zero_grad()
             output = self.temporal_model.forward_train(image, random_image)
+            print(random_image.shape)
             loss = self.criterion(output, target)
             train_loss += loss.item()
             tbar.set_description('Train loss: %.3f' % (train_loss / (i + 1)))
@@ -100,6 +101,18 @@ class TemporalTrainer(Trainer):
         if new_pred > self.best_pred:
             self.best_pred = new_pred
             self.save(epoch, is_best=True)
+
+    def save(self, epoch, is_best):
+        self.saver.save_checkpoint({
+            'epoch': epoch + 1,
+            'state_dict': self.model.module.state_dict(),
+            'optimizer': self.optimizer.state_dict(),
+            'best_pred': self.best_pred,
+            'crf_state_dict': self.crf.module.state_dict() if self.crf is not None else None,
+            'discriminator_state_dict': self.discriminator.module.state_dict() if self.discriminator is not None else None,
+            'discriminator_optimizer_state_dict' : self.optimizer_D.state_dict() if self.optimizer_D is not None else None,
+            'temporal_model_state_dict': self.temporal_model.state_dict()
+        }, is_best)
 
 
 def main():
