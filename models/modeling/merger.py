@@ -193,7 +193,7 @@ class Merger(nn.Module):
             # if self.training:
             #     for b in range(batch):
             #        feature_tmp_projected[b, :, :, :, :] = RandomDropOut(feature_tmp_projected[b, :, :, :, :], CAM_NUM,
-                                                                         p=0.5)
+            #                                                              p=0.5)
 
             # reformat the tensor to become BxCAM_NUM*(C+1)xHxW for network to process
             feature_target = feature_tmp_projected.view(batch, -1, HEIGHT, WIDTH).cuda()  # B x C x H x W

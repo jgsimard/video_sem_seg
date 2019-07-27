@@ -146,7 +146,7 @@ class DeepSightTemporalRGB(Dataset):
                 random_image = Image.open(unlabeled_path)
             t += 1
 
-        # extract diretly from video : SLOWWWWWWWWWWWWWWW
+        # extract diretly from video : SLOOOOOOOOOOOOOOOOOWWWWWWWWWWWWWWW
         # flip = 1 <= int(scene) <= 12 \
         #        or 29 <= int(scene) <= 32 \
         #        or 42 <= int(scene) <= 54 \
@@ -303,6 +303,7 @@ if __name__ == "__main__":
         sample = depth_dataset[i]
         # print(sagit mple)
         img = sample['image']
+        print(img.size())
         label = sample['label']
         uniques = np.unique(label).astype(int)
         n[uniques] += 1

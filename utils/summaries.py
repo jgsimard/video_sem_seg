@@ -23,6 +23,21 @@ class TensorboardSummary(object):
                                                        dataset=dataset), 3, normalize=False, range=(0, 255))
         writer.add_image('Groundtruth_label', grid_image, global_step)
 
+    def visualize_image_temporal(self, writer, dataset, image, target, random_image, output, global_step):
+        grid_image = make_grid(image[:3].clone().cpu().data, 3, normalize=True)
+        writer.add_image('Image', grid_image, global_step)
+
+        grid_image = make_grid(random_image[:3].clone().cpu().data, 3, normalize=True)
+        writer.add_image('Random_Image', grid_image, global_step)
+
+        grid_image = make_grid(decode_seg_map_sequence(torch.max(output[:3], 1)[1].detach().cpu().numpy(),
+                                                       dataset=dataset), 3, normalize=False, range=(0, 255))
+        writer.add_image('Predicted_label', grid_image, global_step)
+
+        grid_image = make_grid(decode_seg_map_sequence(torch.squeeze(target[:3], 1).detach().cpu().numpy(),
+                                                       dataset=dataset), 3, normalize=False, range=(0, 255))
+        writer.add_image('Groundtruth_label', grid_image, global_step)
+
     def visualize_image_mulitview(self, writer, dataset, image, target, output_single, output_multiview, global_step):
         grid_image = make_grid(image[:4].clone().cpu().data, 4, normalize=True)
         writer.add_image('Image', grid_image, global_step)

@@ -1,10 +1,9 @@
 import torch
+import torch.multiprocessing  # TO DO
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.multiprocessing # TO DO
 
 from models.rep_flow_layer import FlowLayer
-
 
 
 class AdaptNet(nn.Module):
@@ -33,12 +32,8 @@ class AdaptiveKeyFrameSelector(nn.Module):
 
 
 class KernelWeightPredictor(nn.Module):
-    '''
-    Produces the weights used for the Spatially Variant Convolution
-
-
-    '''
-    def __init__(self, in_channels=1024, k = 9):
+    # Produces the weights used for the Spatially Variant Convolution
+    def __init__(self, in_channels=1024, k=9):
         self.k = k
         super(KernelWeightPredictor, self).__init__()
         self.conv_reduce = nn.Conv2d(in_channels=in_channels, out_channels=256, kernel_size=3, padding=1)
@@ -47,7 +42,7 @@ class KernelWeightPredictor(nn.Module):
         pass
 
     def forward(self, current_frame_low_features, key_frame_low_features):
-        #compute spatially variant kernels
+        # compute spatially variant kernels
         cur = F.relu(self.conv_reduce(current_frame_low_features))
         key = F.relu(self.conv_reduce(key_frame_low_features))
         x = F.relu(self.conv_2(torch.cat((cur, key), 1)))
@@ -57,11 +52,10 @@ class KernelWeightPredictor(nn.Module):
         x = x.view(b, self.k, self.k, h, w)
         return x
 
+
 class KernelWeightPredictorFlow(nn.Module):
-    '''
-    Produces the weights used for the Spatially Variant Convolution
-    '''
-    def __init__(self, in_channels=1024, k = 9, learnable=True, flow_channels=32, n_iter=5):
+    # Produces the weights used for the Spatially Variant Convolution using a representation flow layer
+    def __init__(self, in_channels=1024, k=9, learnable=True, flow_channels=32, n_iter=5):
         self.k = k
         super(KernelWeightPredictorFlow, self).__init__()
         self.conv_reduce = nn.Conv2d(in_channels=in_channels, out_channels=256, kernel_size=3, padding=1)
@@ -79,6 +73,7 @@ class KernelWeightPredictorFlow(nn.Module):
         x = x.view(b, t - 1, c * 2, h, w).permute(0, 2, 1, 3, 4).contiguous().squeeze()  # shape BxC*2xHxW
         x = F.relu(self.conv_expand(x))
         return x
+
 
 class SpatiallyVariantConvolution(nn.Module):
     def __init__(self, kernel_size):
@@ -108,7 +103,7 @@ class AdaptiveFeaturePropagation(nn.Module):
 
 
 class LowLatencyModel(nn.Module):
-    def __init__(self, deeplab, threshold = 0.3, fixed_schedule = 5):
+    def __init__(self, deeplab, threshold=0.3, fixed_schedule=5):
         super(LowLatencyModel, self).__init__()
         self.adaptive_feature_propagation = AdaptiveFeaturePropagation()
         self.adaptive_key_frame_selector = AdaptiveKeyFrameSelector()
@@ -131,8 +126,7 @@ class LowLatencyModel(nn.Module):
         seg_map_1 = torch.argmax(features_1, dim=1)
         seg_map_2 = torch.argmax(features_2, dim=1)
         b, c, h, w = features_1.shape
-        return torch.einsum('bhw->b', [torch.eq(seg_map_1, seg_map_2)]) / (h*w)
-
+        return torch.einsum('bhw->b', [torch.eq(seg_map_1, seg_map_2)]) / (h * w)
 
     def forward_train(self, input, random_input):
         random_frame_low_features = self.deeplab.forward_low(random_input)
@@ -151,7 +145,6 @@ class LowLatencyModel(nn.Module):
 
         return x, deviation, real_deviation
 
-
     def forward(self, input):
         cur_frame_low_features = self.deeplab.forward_low(input)
         if self.key_frame_low_features is None:
@@ -169,11 +162,7 @@ class LowLatencyModel(nn.Module):
         if new_key_frame:
             return self.forward_deeplab(cur_frame_low_features)
         else:
-            x = self.adaptive_feature_propagation(cur_frame_low_features, self.key_frame_low_features, self.key_frame_high_features)
+            x = self.adaptive_feature_propagation(cur_frame_low_features, self.key_frame_low_features,
+                                                  self.key_frame_high_features)
             x = self.adapt_net(x, cur_frame_low_features)
             return x
-
-
-
-
-

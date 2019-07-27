@@ -4,7 +4,7 @@ python train.py --backbone resnet \
                 --lr 0.0007 \
                 --workers 32 \
                 --batch-size 16 \
-                --gpu-ids 0\
+                --gpu-ids  1\
                 --checkname deeplab-resnet \
                 --eval-interval 1 \
                 --dataset isi_rgb \

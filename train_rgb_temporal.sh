@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-CUDA_VISIBLE_DEVICES=2
+CUDA_VISIBLE_DEVICES=3
 DATASET_DIR=/home/deepsight/data/rgb_corrected
-#DATASET_DIR = /home/deepsight2/development/data/rgb
 
 python train.py --backbone resnet \
                 --lr 0.0001 \
@@ -20,6 +19,4 @@ python train.py --backbone resnet \
                 --n_critic 1 \
                 --generator_loss_weight 0.001 \
                 --skip_classes cannula,instrument \
-                --img_shape 513,513 \
-                --resume ./run/isi_rgb/deeplab-resnet-pretrained-BIG/experiment_0/checkpoint.pth.tar
-
+                --img_shape 513,513

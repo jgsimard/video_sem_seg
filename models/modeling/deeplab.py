@@ -1,3 +1,5 @@
+import sys
+sys.path.insert(0, "//home/deepsight2/jg_internship/video_sem_seg/models")
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -82,10 +84,27 @@ class DeepLab(nn.Module):
 
 
 if __name__ == "__main__":
-    model = DeepLab(backbone='mobilenet', output_stride=16)
+    from torch2trt import torch2trt
+    import time
+    model = DeepLab(backbone='resnet', output_stride=16)
     model.eval()
+    model.cuda()
     input = torch.rand(1, 3, 513, 513)
-    output = model(input)
+
+    print("NORMAL")
+    start = time.time()
+    for i in range(10):
+        output = model(input)
+    end = time.time()
+    print(f"Time elapsed : {end-start}")
     print(output.size())
+    print("TENSOR RT")
+    model_trt = torch2trt(model, [input])
+    print(model_trt)
+    start = time.time()
+    for i in range(10):
+        output = model(input)
+    end = time.time()
+    print(f"Time elapsed : {end-start}")
 
 

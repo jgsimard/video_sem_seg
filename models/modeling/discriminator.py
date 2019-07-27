@@ -4,6 +4,7 @@ from torch import Tensor
 import numpy as np
 import torch.autograd as autograd
 from torch.autograd.variable import Variable
+import math
 
 HEIGHT = 287
 WIDTH = 352
@@ -33,8 +34,10 @@ class Discriminator(nn.Module):
 
         self.model = nn.Sequential(*model)
 
-        height = img_height // 2 ** num_block + 1
-        width = img_width // 2 ** num_block + 1
+        height = math.ceil(img_height / 2 ** num_block)
+        width = math.ceil(img_width / 2 ** num_block)
+        print(height)
+        print(width)
         self.adv_layer = nn.Linear(filter_base * 2 ** (i + 1) * height * width, 1)
 
     def forward(self, img):
@@ -96,15 +99,15 @@ def onehot(targets, num_classes):
 
 
 if __name__ == '__main__':
-    import torchsummary
+    # import torchsummary
 
     # target = torch.ones([1, 5, 5]).cuda()
     # target_onehot = onehot(target, 5)
     # target_smoothed = label_smoothing(target_onehot, 50)
 
-    d = Discriminator(13, HEIGHT, WIDTH, filter_base=16).cuda()
+    d = Discriminator(13, HEIGHT, WIDTH, filter_base=16,num_block=4).cuda()
 
-    torchsummary.summary(d, (13, 287, 352))
+    # torchsummary.summary(d, (13, 287, 352))
 
     print(d)
 

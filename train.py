@@ -49,6 +49,9 @@ class Trainer(object):
 
         if args.adversarial_loss:
             self.build_adverserial_model()
+        else:
+            self.discriminator = None
+            self.optimizer_D = None
 
         self.define_pixel_criterion()
 
@@ -73,6 +76,9 @@ class Trainer(object):
     def define_evaluators(self):
         if self.args.dataset == "isi_intensity":
             weights = np.array([1, 1, 1, 1, 1, 1, 0, 1, 1, 0, 0, 1, 1]) > 0.5
+
+        if self.args.dataset == "isi_rgb" and self.args.skip_classes is not None:
+            weights = self.args.skip_weights > 0.5
         else:
             weights = None
 
@@ -102,6 +108,10 @@ class Trainer(object):
                 weight = calculate_weigths_labels(self.args.dataset_dir, self.train_loader, self.nclass)
             weight = torch.from_numpy(weight.astype(np.float32))
             print(f"Classes weights : {weight}")
+
+        elif self.args.skip_classes is not None:
+            weight = torch.from_numpy(self.args.skip_weights.astype(np.float32))
+            print(f"Classes weights : {weight}")
         else:
             weight = None
         self.criterion = SegmentationLosses(weight=weight, cuda=self.args.cuda).build_loss(mode=self.args.loss_type)
@@ -114,23 +124,22 @@ class Trainer(object):
         self.train_d = False
         print('Define discriminator')
         self.discriminator = Discriminator(input_nc=self.nclass,
-                                           img_height=513,
-                                           img_width=513,
+                                           img_height=self.args.img_shape[0],
+                                           img_width=self.args.img_shape[1],
                                            filter_base=16,
                                            n_iter=self.args.n_critic,
                                            generator_loss_weight=self.args.generator_loss_weight,
-                                           lr_ratio=1,
-                                           gp_weigth=self.args.gradient_penalty_weight)
+                                           lr_ratio=self.args.lr_ratio,
+                                           gp_weigth=self.args.gradient_penalty_weight,
+                                           num_block=self.args.discriminator_blocks)
         self.discriminator = init_net(self.discriminator,
                                       type='kaiming',
                                       activation_mode='relu',
                                       distribution='normal')
         print('Add optimizer for discriminator')
         self.optimizer_D = torch.optim.Adam(self.discriminator.parameters(),
-                                            lr=self.args.lr,
+                                            lr=self.args.lr * self.args.lr_ratio,
                                             weight_decay=self.args.weight_decay)
-
-
 
     def build_crf(self):
         self.crf = None
@@ -173,19 +182,24 @@ class Trainer(object):
             if self.args.GaussCrf and 'crf_state_dict' in checkpoint:
                 if checkpoint['crf_state_dict'] is not None:
                     self.crf.module.load_state_dict(checkpoint['crf_state_dict'])
-            if self.args.adversarial_loss:
-                self.discriminator.module.load_state_dict(checkpoint['discriminator_state_dict'])
+            if self.args.adversarial_loss and 'discriminator_state_dict' in checkpoint:
+                if checkpoint['discriminator_state_dict'] is not None:
+                    self.discriminator.module.load_state_dict(checkpoint['discriminator_state_dict'])
         else:
             self.model.load_state_dict(checkpoint['state_dict'])
             if self.args.GaussCrf and 'crf_state_dict' in checkpoint:
                 if checkpoint['crf_state_dict'] is not None:
                     self.crf.load_state_dict(checkpoint['crf_state_dict'])
-            if self.args.adversarial_loss:
-                self.discriminator.load_state_dict(checkpoint['discriminator_state_dict'])
+            if self.args.adversarial_loss and 'discriminator_state_dict' in checkpoint:
+                if checkpoint['discriminator_state_dict'] is not None:
+                    self.discriminator.load_state_dict(checkpoint['discriminator_state_dict'])
         if self.args.ft:
             self.args.start_epoch = 0
         else:
             self.optimizer.load_state_dict(checkpoint['optimizer'])
+            if self.args.adversarial_loss and 'discriminator_optimizer_state_dict' in checkpoint:
+                if checkpoint['discriminator_optimizer_state_dict'] is not None:
+                    self.optimizer_D.load_state_dict(checkpoint['discriminator_optimizer_state_dict'])
         self.best_pred = checkpoint['best_pred']
         print(f"=> loaded checkpoint '{self.args.resume}' (epoch {checkpoint['epoch']})")
 
@@ -251,6 +265,8 @@ class Trainer(object):
             'optimizer': self.optimizer.state_dict(),
             'best_pred': self.best_pred,
             'crf_state_dict': self.crf.module.state_dict() if self.crf is not None else None,
+            'discriminator_state_dict': self.discriminator.module.state_dict() if self.discriminator is not None else None,
+            'discriminator_optimizer_state_dict' : self.optimizer_D.state_dict() if self.optimizer_D is not None else None
         }, is_best)
 
     def training(self, epoch):
@@ -376,10 +392,6 @@ def get_args():
                         choices=['pascal', 'coco', 'cityscapes', 'isi_rgb', 'isi_intensity', 'isi_depth',
                                  'isi_intensi'],
                         help='dataset name (default: isi)')
-    parser.add_argument('--use-sbd',
-                        action='store_true',
-                        default=True,
-                        help='whether to use SBD dataset (default: True)')
     parser.add_argument('--workers',
                         type=int,
                         default=4,
@@ -518,6 +530,14 @@ def get_args():
                         type=int,
                         default=0,
                         help='Epoch at which to start training the CRF (not stable if trained from the begining!)')
+    parser.add_argument('--skip_classes',
+                        type=str,
+                        default=None,
+                        help='Classes to skip in the computation of the iou and the loss')
+    parser.add_argument('--img_shape',
+                        type=str,
+                        default="513,513",
+                        help='Image shape')
     # adversarial loss
     parser.add_argument('--adversarial_loss',
                         action='store_true',
@@ -535,6 +555,14 @@ def get_args():
                         type=int,
                         default=2,
                         help='n_critic (default: 2)')
+    parser.add_argument('--lr_ratio',
+                        type=float,
+                        default=1/7,
+                        help='lr_ratio (default: 1/7)')
+    parser.add_argument('--discriminator_blocks',
+                        type=int,
+                        default=4,
+                        help='discriminator_blocks (default: 4)')
 
     args = parser.parse_args()
 
@@ -579,6 +607,29 @@ def get_args():
 
     if args.checkname is None:
         args.checkname = 'deeplab-' + str(args.backbone)
+
+    if args.skip_classes is not None:
+        print(args.dataset, args.dataset == 'isi_rgb')
+        if args.dataset == 'isi_rgb':
+            CLASSES = ['ortable',
+                       'psc',
+                       'vsc',
+                       'human',
+                       'cielinglight',
+                       'mayostand',
+                       'table',
+                       'anesthesiacart',
+                       'cannula',
+                       'instrument']
+            print(CLASSES)
+            label_name_to_value = {x: i + 1 for i, x in enumerate(CLASSES)}
+            weights = np.ones(len(CLASSES) + 1)
+            for c in args.skip_classes.split(','):
+                weights[label_name_to_value[c]] = 0
+            args.skip_weights = weights
+
+    args.img_shape = [int(i) for i in args.img_shape.split(',')]
+
     return args
 
 
@@ -592,7 +643,6 @@ def seed(seed=1234):
 
 def main():
     args = get_args()
-    os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda_visible_devices
     seed(args.seed)
     print(args)
     trainer = Trainer(args)
@@ -607,4 +657,5 @@ def main():
 
 
 if __name__ == "__main__":
+    os.environ["CUDA_VISIBLE_DEVICES"]="2"
     main()
