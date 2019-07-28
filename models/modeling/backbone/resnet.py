@@ -133,10 +133,11 @@ class ResNet(nn.Module):
         return x
 
     def forward_high(self, x):
+        low_level_feat = x
         x = self.layer2(x)
         x = self.layer3(x)
         x = self.layer4(x)
-        return x
+        return x, low_level_feat
 
     def _init_weight(self):
         for m in self.modules():

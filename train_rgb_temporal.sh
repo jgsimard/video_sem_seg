@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 CUDA_VISIBLE_DEVICES=3
-DATASET_DIR=/home/deepsight/data/rgb_corrected
+DATASET_DIR=/home/deepsight/data/rgb
 
-python train_temporal.py --backbone resnet \
+python train_temporal.py --backbone xception \
                 --lr 0.0001 \
                 --workers 8 \
-                --batch-size 12 \
+                --batch-size 6 \
                 --cuda_visible_devices 2 \
                 --gpu-ids 0 \
-                --checkname TEMPORAL-deeplab-resnet \
+                --checkname deeplab-xception \
                 --eval-interval 1 \
-                --dataset isi_rgb \
+                --dataset isi_rgb_temporal \
                 --epochs 400 \
                 --dataset_dir $DATASET_DIR \
                 --optimizer Adam \
@@ -20,4 +20,4 @@ python train_temporal.py --backbone resnet \
                 --generator_loss_weight 0.001 \
                 --skip_classes cannula,instrument \
                 --img_shape 513,513 \
-                --resume ./run/isi_rgb/deeplab-resnet-pretrained-BIG/experiment_0/checkpoint.pth.tar
+                --separate_spatial_model_path ./run/isi_rgb/deeplab-xception-adv/experiment_4/checkpoint.pth.tar

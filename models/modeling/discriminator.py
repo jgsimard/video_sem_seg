@@ -36,8 +36,8 @@ class Discriminator(nn.Module):
 
         height = math.ceil(img_height / 2 ** num_block)
         width = math.ceil(img_width / 2 ** num_block)
-        print(height)
-        print(width)
+        # print(height)
+        # print(width)
         self.adv_layer = nn.Linear(filter_base * 2 ** (i + 1) * height * width, 1)
 
     def forward(self, img):

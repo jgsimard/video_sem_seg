@@ -16,7 +16,7 @@ class AdaptNet(nn.Module):
 
 
 class AdaptiveKeyFrameSelector(nn.Module):
-    def __init__(self, in_channels=1024):
+    def __init__(self, in_channels=128):
         super(AdaptiveKeyFrameSelector, self).__init__()
         self.conv_reduce = nn.Conv2d(in_channels=in_channels, out_channels=256, kernel_size=3)
         self.conv_2 = nn.Conv2d(in_channels=256, out_channels=256, kernel_size=3)
@@ -26,19 +26,20 @@ class AdaptiveKeyFrameSelector(nn.Module):
         cur = F.relu(self.conv_reduce(current_frame_low_features))
         key = F.relu(self.conv_reduce(key_frame_low_features))
         out = F.relu(self.conv_2(cur - key))
-        out = F.avg_pool2d(out)
+        b,c,h,w = out.shape
+        out = F.avg_pool2d(out, kernel_size=(h,w))
         out = out.view(-1, 256)
         return F.sigmoid(self.pred(out))
 
 
 class KernelWeightPredictor(nn.Module):
     # Produces the weights used for the Spatially Variant Convolution
-    def __init__(self, in_channels=1024, k=9):
+    def __init__(self, in_channels=128, k=7):
         self.k = k
         super(KernelWeightPredictor, self).__init__()
         self.conv_reduce = nn.Conv2d(in_channels=in_channels, out_channels=256, kernel_size=3, padding=1)
         self.conv_2 = nn.Conv2d(in_channels=512, out_channels=256, kernel_size=3, padding=1)
-        self.conv_3 = nn.Conv2d(in_channels=256, out_channels=81, kernel_size=1)
+        self.conv_3 = nn.Conv2d(in_channels=256, out_channels=k**2, kernel_size=1)
         pass
 
     def forward(self, current_frame_low_features, key_frame_low_features):
@@ -55,7 +56,7 @@ class KernelWeightPredictor(nn.Module):
 
 class KernelWeightPredictorFlow(nn.Module):
     # Produces the weights used for the Spatially Variant Convolution using a representation flow layer
-    def __init__(self, in_channels=1024, k=9, learnable=True, flow_channels=32, n_iter=5):
+    def __init__(self, in_channels=1024, k=7, learnable=True, flow_channels=32, n_iter=5):
         self.k = k
         super(KernelWeightPredictorFlow, self).__init__()
         self.conv_reduce = nn.Conv2d(in_channels=in_channels, out_channels=256, kernel_size=3, padding=1)
@@ -81,34 +82,42 @@ class SpatiallyVariantConvolution(nn.Module):
         self.unfold = nn.Unfold(kernel_size=(kernel_size, kernel_size), padding=kernel_size // 2)
 
     def forward(self, kernels, features):
-        assert len(kernels.shape) == 5, 'need the shape b x k x k x h x w'
+        assert len(kernels.shape) == 5, 'need the shape b  k x k x h x w'
         assert len(features.shape) == 4, 'need the shape b x c x h x w'
-        features = self.pad(features)
+        print(f"kernels.shape={kernels.shape}, features.shape={features.shape}")
+        # features = self.pad(features)
         b, c, h, w = features.shape
-        _, _, _, k, _ = kernels.shape
-        features_unfold = self.unfold(features).view(b, c, k, k, h, w)
+        b_, k, k_,h_, w_  = kernels.shape
+        features_unfold = self.unfold(features)
+        print(f"kernels.shape={kernels.shape}, features.shape={features.shape}, features_unfold.shape={features_unfold.shape}")
+        features_unfold = features_unfold.view(b, c, k, k, h, w)
         out = torch.einsum('bcklhw,bklhw->bchw', [features_unfold, kernels])
+        print(f"out.shape={out.shape}")
         return out
 
 
 class AdaptiveFeaturePropagation(nn.Module):
-    def __init__(self, in_channels=1024):
+    def __init__(self, in_channels=128, size=[513,513], kernel_size=7):
         super(AdaptiveFeaturePropagation, self).__init__()
+        self.upsample = nn.Upsample(size=size, mode='bilinear')
         self.kernel_weight_predictor = KernelWeightPredictor(in_channels)
-        self.spatially_variant_convolution = SpatiallyVariantConvolution(kernel_size=9)
+        self.spatially_variant_convolution = SpatiallyVariantConvolution(kernel_size=kernel_size)
 
     def forward(self, current_frame_low_features, key_frame_low_features, key_frame_high_features):
-        spatially_variant_kernels = self.kernel_weight_predictor(current_frame_low_features, key_frame_low_features)
+        current_frame_low_features_upsampled = self.upsample(current_frame_low_features)
+        key_frame_low_features_upsampled = self.upsample(key_frame_low_features)
+        spatially_variant_kernels = self.kernel_weight_predictor(current_frame_low_features_upsampled,
+                                                                 key_frame_low_features_upsampled)
         return self.spatially_variant_convolution(spatially_variant_kernels, key_frame_high_features)
 
 
 class LowLatencyModel(nn.Module):
-    def __init__(self, deeplab, threshold=0.3, fixed_schedule=5):
+    def __init__(self, spatial_model, threshold=0.3, fixed_schedule=5, kernel_size=7):
         super(LowLatencyModel, self).__init__()
-        self.adaptive_feature_propagation = AdaptiveFeaturePropagation()
+        self.adaptive_feature_propagation = AdaptiveFeaturePropagation(in_channels=128, size=[513,513], kernel_size=kernel_size)
         self.adaptive_key_frame_selector = AdaptiveKeyFrameSelector()
         self.adapt_net = AdaptNet()
-        self.deeplab = deeplab
+        self.spatial_model = spatial_model
 
         self.key_frame_low_features = None
         self.key_frame_high_features = None
@@ -117,9 +126,10 @@ class LowLatencyModel(nn.Module):
         self.fixed_schedule = fixed_schedule
         self.threshold = threshold
 
-    def forward_deeplab(self, cur_frame_low_features):
+    def forward_spatial_model(self, cur_frame_low_features):
         self.key_frame_low_features = cur_frame_low_features
-        self.key_frame_high_features = self.deeplab.forward_high(cur_frame_low_features)
+        print(cur_frame_low_features.shape)
+        self.key_frame_high_features = self.spatial_model.forward_high(cur_frame_low_features)
         return self.key_frame_high_features
 
     def compute_deviation(self, features_1, features_2):
@@ -128,41 +138,49 @@ class LowLatencyModel(nn.Module):
         b, c, h, w = features_1.shape
         return torch.einsum('bhw->b', [torch.eq(seg_map_1, seg_map_2)]) / (h * w)
 
-    def forward_train(self, input, random_input):
-        random_frame_low_features = self.deeplab.module.forward_low(random_input)
-        self.forward_deeplab(random_frame_low_features)
-        cur_frame_low_features = self.deeplab.forward_low(input)
+    def forward(self, input, random_input = None, train=False):
+        # input is new frame on which to do inference
+        # random_input is the past key frame
+        if train:
+            # input is new frame on which to do inference
+            # random_input is the past key frame
+            random_frame_low_features = self.spatial_model.forward_low(random_input)
+            self.forward_spatial_model(random_frame_low_features)
+            cur_frame_low_features = self.spatial_model.forward_low(input)
 
-        # deviation
-        deviation = self.adaptive_key_frame_selector(cur_frame_low_features, self.key_frame_low_features)
-        cur_frame_high_features = self.deeplab.forward_high(cur_frame_low_features)
-        real_deviation = self.compute_deviation(cur_frame_high_features, self.key_frame_high_features)
-
-        # feature propagation
-        x = self.adaptive_feature_propagation(cur_frame_low_features, self.key_frame_low_features,
-                                              self.key_frame_high_features)
-        x = self.adapt_net(x, cur_frame_low_features)
-
-        return x, deviation, real_deviation
-
-    def forward(self, input):
-        cur_frame_low_features = self.deeplab.forward_low(input)
-        if self.key_frame_low_features is None:
-            return self.forward_deeplab(cur_frame_low_features)
-
-        new_key_frame = False
-        if self.fixed_schedule is not None:
-            if self.steps_same_key_frame >= self.fixed_schedule:
-                new_key_frame = True
-        else:
+            # deviation
             deviation = self.adaptive_key_frame_selector(cur_frame_low_features, self.key_frame_low_features)
-            if deviation > self.threshold:
-                new_key_frame = True
+            cur_frame_high_features = self.spatial_model.forward_high(cur_frame_low_features)
+            real_deviation = self.compute_deviation(cur_frame_high_features, self.key_frame_high_features)
 
-        if new_key_frame:
-            return self.forward_deeplab(cur_frame_low_features)
-        else:
+            # feature propagation
             x = self.adaptive_feature_propagation(cur_frame_low_features, self.key_frame_low_features,
                                                   self.key_frame_high_features)
             x = self.adapt_net(x, cur_frame_low_features)
-            return x
+
+            return x, deviation, real_deviation
+
+        else:
+            cur_frame_low_features = self.spatial_model.forward_low(input)
+            if self.key_frame_low_features is None:
+                return self.forward_spatial_model(cur_frame_low_features)
+
+            new_key_frame = False
+            if self.fixed_schedule is not None:
+                if self.steps_same_key_frame >= self.fixed_schedule:
+                    new_key_frame = True
+            else:
+                deviation = self.adaptive_key_frame_selector(cur_frame_low_features, self.key_frame_low_features)
+                if deviation > self.threshold:
+                    new_key_frame = True
+
+            if new_key_frame:
+                return self.forward_spatial_model(cur_frame_low_features)
+            else:
+                x = self.adaptive_feature_propagation(cur_frame_low_features, self.key_frame_low_features,
+                                                      self.key_frame_high_features)
+                x = self.adapt_net(x, cur_frame_low_features)
+                return x
+
+    # def learnable_parameters(self):
+    #     return self.adaptive_feature_propagation.parameters() + self.adaptive_key_frame_selector.parameters() + self.adapt_net.parameters()

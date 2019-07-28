@@ -23,28 +23,16 @@ from utils.summaries import TensorboardSummary
 class Trainer(object):
     def __init__(self, args):
         self.args = args
+        self.prepare_saver()
+        self.prepare_tensorboard()
+        self.prepare_dataloader()
 
-        # Define Saver
-        self.saver = Saver(args)
-        self.saver.save_experiment_config()
-
-        # Define Tensorboard Summary
-        self.summary = TensorboardSummary(self.saver.experiment_dir)
-        self.writer = self.summary.create_summary()
-
-        # Define Dataloader
-        kwargs = {'num_workers': args.workers, 'pin_memory': True}
-        self.train_loader, self.val_loader, self.test_loader, self.nclass = make_data_loader(args, **kwargs)
-
-        # Define network
         self.model = DeepLab(num_classes=self.nclass,
                              backbone=args.backbone,
                              output_stride=args.out_stride,
                              sync_bn=args.sync_bn,
                              freeze_bn=args.freeze_bn)
-
         self.build_crf()
-
         self.define_optimizer()
 
         if args.adversarial_loss:
@@ -54,8 +42,6 @@ class Trainer(object):
             self.optimizer_D = None
 
         self.define_pixel_criterion()
-
-        # Define Evaluator
         self.define_evaluators()
 
         # Define lr scheduler
@@ -73,11 +59,23 @@ class Trainer(object):
         if args.resume is not None:
             self.resume_model()
 
+    def prepare_saver(self):
+        self.saver = Saver(self.args)
+        self.saver.save_experiment_config()
+
+    def prepare_tensorboard(self):
+        self.summary = TensorboardSummary(self.saver.experiment_dir)
+        self.writer = self.summary.create_summary()
+
+    def prepare_dataloader(self):
+        kwargs = {'num_workers': self.args.workers, 'pin_memory': True}
+        self.train_loader, self.val_loader, self.test_loader, self.nclass = make_data_loader(self.args, **kwargs)
+
     def define_evaluators(self):
         if self.args.dataset == "isi_intensity":
             weights = np.array([1, 1, 1, 1, 1, 1, 0, 1, 1, 0, 0, 1, 1]) > 0.5
 
-        if self.args.dataset == "isi_rgb" and self.args.skip_classes is not None:
+        if (self.args.dataset == "isi_rgb" or self.args.dataset =="isi_rgb_temporal") and self.args.skip_classes is not None:
             weights = self.args.skip_weights > 0.5
         else:
             weights = None
@@ -177,6 +175,7 @@ class Trainer(object):
         checkpoint = torch.load(self.args.resume)
         self.args.start_epoch = checkpoint['epoch']
 
+        # Model + Discriminator
         if self.args.cuda:
             self.model.module.load_state_dict(checkpoint['state_dict'])
             if self.args.GaussCrf and 'crf_state_dict' in checkpoint:
@@ -193,6 +192,8 @@ class Trainer(object):
             if self.args.adversarial_loss and 'discriminator_state_dict' in checkpoint:
                 if checkpoint['discriminator_state_dict'] is not None:
                     self.discriminator.load_state_dict(checkpoint['discriminator_state_dict'])
+
+        # Optimizers
         if self.args.ft:
             self.args.start_epoch = 0
         else:
@@ -201,9 +202,9 @@ class Trainer(object):
                 if checkpoint['discriminator_optimizer_state_dict'] is not None:
                     self.optimizer_D.load_state_dict(checkpoint['discriminator_optimizer_state_dict'])
         self.best_pred = checkpoint['best_pred']
-        print(f"=> loaded checkpoint '{self.args.resume}' (epoch {checkpoint['epoch']})")
 
-        # Clear start epoch if fine-tuning\
+        if self.args.print_ft:
+            print(f"=> loaded checkpoint '{self.args.resume}' (epoch {checkpoint['epoch']})")
 
     def train_adverserial(self, output, target, i, num_img_tr, epoch, loss):
         self.optimizer_D.zero_grad()
@@ -259,15 +260,13 @@ class Trainer(object):
             self.writer.add_scalar('train/generator_loss', adv_loss.item(), i + num_img_tr * epoch)
 
     def save(self, epoch, is_best):
-        self.saver.save_checkpoint({
-            'epoch': epoch + 1,
-            'state_dict': self.model.module.state_dict(),
-            'optimizer': self.optimizer.state_dict(),
-            'best_pred': self.best_pred,
-            'crf_state_dict': self.crf.module.state_dict() if self.crf is not None else None,
-            'discriminator_state_dict': self.discriminator.module.state_dict() if self.discriminator is not None else None,
-            'discriminator_optimizer_state_dict' : self.optimizer_D.state_dict() if self.optimizer_D is not None else None
-        }, is_best)
+        self.checkpoint = self.saver.save_checkpoint(
+            {'epoch': epoch + 1, 'state_dict': self.model.module.state_dict(), 'optimizer': self.optimizer.state_dict(),
+             'best_pred': self.best_pred,
+             'crf_state_dict': self.crf.module.state_dict() if self.crf is not None else None,
+             'discriminator_state_dict': self.discriminator.module.state_dict() if self.discriminator is not None else None,
+             'discriminator_optimizer_state_dict': self.optimizer_D.state_dict() if self.optimizer_D is not None else None},
+            is_best)
 
     def training(self, epoch):
         train_loss = 0.0
@@ -389,8 +388,7 @@ def get_args():
     parser.add_argument('--dataset',
                         type=str,
                         default='isi',
-                        choices=['pascal', 'coco', 'cityscapes', 'isi_rgb', 'isi_intensity', 'isi_depth',
-                                 'isi_intensi'],
+                        choices=['pascal', 'coco', 'cityscapes', 'isi_rgb', 'isi_intensity', 'isi_depth', 'isi_rgb_temporal'],
                         help='dataset name (default: isi)')
     parser.add_argument('--workers',
                         type=int,
@@ -503,6 +501,10 @@ def get_args():
                         action='store_true',
                         default=False,
                         help='finetuning on a different dataset')
+    parser.add_argument('--print_ft',
+                        type=bool,
+                        default=True,
+                        help='print finetuning on a different dataset')
     # evaluation option
     parser.add_argument('--eval-interval',
                         type=int,
@@ -538,7 +540,8 @@ def get_args():
                         type=str,
                         default="513,513",
                         help='Image shape')
-    # adversarial loss
+
+    # Adversarial loss
     parser.add_argument('--adversarial_loss',
                         action='store_true',
                         default=False,
@@ -563,6 +566,12 @@ def get_args():
                         type=int,
                         default=4,
                         help='discriminator_blocks (default: 4)')
+
+    # Temporal
+    parser.add_argument('--separate_spatial_model_path',
+                        type=str,
+                        default=None,
+                        help='Path to the spatial model when pretrained seperatly')
 
     args = parser.parse_args()
 
@@ -610,7 +619,7 @@ def get_args():
 
     if args.skip_classes is not None:
         print(args.dataset, args.dataset == 'isi_rgb')
-        if args.dataset == 'isi_rgb':
+        if args.dataset == 'isi_rgb' or args.dataset == 'isi_rgb_temporal':
             CLASSES = ['ortable',
                        'psc',
                        'vsc',

@@ -71,7 +71,7 @@ class ToTensor(object):
 
         if self.temporal:
             random_image = np.array(sample['random_image']).astype(np.float32).transpose((2, 0, 1))
-            random_image = torch.from_numpy(random_image)
+            random_image = torch.from_numpy(random_image).float()
         else:
             random_image = -1
 

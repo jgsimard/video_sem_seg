@@ -140,11 +140,15 @@ class DeepSightTemporalRGB(Dataset):
 
         # because not finished processing
         t = max(possibles)
+        # print(scene, number)
         while random_image is None:
             unlabeled_path = os.path.join(self.unlabeled_dir, scene, f"{number - t}.jpg")
             if os.path.isfile(unlabeled_path):
                 random_image = Image.open(unlabeled_path)
             t += 1
+            if t > 10000:
+                t = -20000
+            # print(t)
 
         # extract diretly from video : SLOOOOOOOOOOOOOOOOOWWWWWWWWWWWWWWW
         # flip = 1 <= int(scene) <= 12 \
