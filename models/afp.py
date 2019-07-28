@@ -2,6 +2,7 @@ import torch
 import torch.multiprocessing  # TO DO
 import torch.nn as nn
 import torch.nn.functional as F
+from opt_einsum import contract
 
 from models.rep_flow_layer import FlowLayer
 
@@ -82,17 +83,36 @@ class SpatiallyVariantConvolution(nn.Module):
         self.unfold = nn.Unfold(kernel_size=(kernel_size, kernel_size), padding=kernel_size // 2)
 
     def forward(self, kernels, features):
-        assert len(kernels.shape) == 5, 'need the shape b  k x k x h x w'
+        assert len(kernels.shape) == 5, 'need the shape b x k x k x h x w'
         assert len(features.shape) == 4, 'need the shape b x c x h x w'
-        print(f"kernels.shape={kernels.shape}, features.shape={features.shape}")
+        # print(f"kernels.shape={kernels.shape}, features.shape={features.shape}")
         # features = self.pad(features)
         b, c, h, w = features.shape
         b_, k, k_,h_, w_  = kernels.shape
         features_unfold = self.unfold(features)
-        print(f"kernels.shape={kernels.shape}, features.shape={features.shape}, features_unfold.shape={features_unfold.shape}")
-        features_unfold = features_unfold.view(b, c, k, k, h, w)
+        # print(f"kernels.shape={kernels.shape}, features.shape={features.shape}, features_unfold.shape={features_unfold.shape}")
+        features_unfold = features_unfold.view(b, c, k, k, h, w).contiguous()
         out = torch.einsum('bcklhw,bklhw->bchw', [features_unfold, kernels])
-        print(f"out.shape={out.shape}")
+        # print(f"out.shape={out.shape}")
+        return out
+
+
+class SpatiallyVariantConvolutionStridded(nn.Module):
+    def __init__(self, kernel_size):
+        super(SpatiallyVariantConvolutionStridded, self).__init__()
+        self.pad = nn.ZeroPad2d(kernel_size//2)
+        self.ks = kernel_size
+
+    def forward(self, kernels, features):
+        ks = self.ks
+        bs, in_c, h_, w_ = features.size()
+        features = self.pad(features)
+        bs, in_c, h, w = features.size()
+        strided_features = features.as_strided((bs, in_c, h - ks + 1, w - ks + 1, ks, ks),
+                                               (h * w * in_c, h * w, w, 1, w, 1))
+        # out = torch.matmul(strided_features.view(bs, in_c, h_*w_, ks*ks), kernels.view(bs, ks*ks, h_*w_))
+        # out = contract('bchwkl,bklhw->bchw', strided_features, kernels, backend='torch')
+        out = torch.einsum('bchwkl,bklhw->bchw', [strided_features, kernels])
         return out
 
 
@@ -181,6 +201,31 @@ class LowLatencyModel(nn.Module):
                                                       self.key_frame_high_features)
                 x = self.adapt_net(x, cur_frame_low_features)
                 return x
+if __name__ == '__main__':
+    import time
+    # b,c,h,w = 2,11,600,600
+    #k=9
+    b, c, h, w = 4, 11, 60, 500
+    k=3
+    N = 100
+    features = torch.rand((b,c,h,w)).cuda()
+    kernels = torch.rand((b,k,k,h,w)).cuda()
+    svc = SpatiallyVariantConvolution(k)
+    svc_2 = SpatiallyVariantConvolutionStridded(k)
+    svc_2(kernels, features)
 
-    # def learnable_parameters(self):
-    #     return self.adaptive_feature_propagation.parameters() + self.adaptive_key_frame_selector.parameters() + self.adapt_net.parameters()
+
+    # start = time.time()
+    # for i in range(N):
+    #     out_1 = svc(kernels, features)
+    # print(f"unfold={time.time() - start}, memory = {torch.cuda.memory_allocated()}")
+
+    start = time.time()
+    for i in range(N):
+        out_2 = svc_2(kernels, features)
+    print(f"stridded={time.time() - start}, memory = {torch.cuda.memory_allocated()}")
+    # print(out_1.shape, out_2.shape)
+
+    print(torch.equal(out_1,out_2))
+
+
