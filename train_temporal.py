@@ -41,7 +41,7 @@ class TemporalTrainer(Trainer):
         for param in self.spatial_model.parameters():
             param.requires_grad = False
 
-        self.temporal_model = LowLatencyModel(self.spatial_model)
+        self.temporal_model = LowLatencyModel(self.spatial_model, kernel_size=self.args.svc_kernel_size, flow=self.args.flow)
         self.define_optimizer()
 
         if args.adversarial_loss:
@@ -159,9 +159,7 @@ class TemporalTrainer(Trainer):
                 image, target, random_image = image.cuda(), target.cuda(), random_image.cuda()
             self.scheduler(self.optimizer, i, epoch, self.best_pred)
             self.optimizer.zero_grad()
-            output = self.temporal_model(image, random_input=random_image, train = True)
-            print(f"output={output}")
-            print(random_image.shape)
+            output, dev_estimate, target_dev = self.temporal_model(image, random_input=random_image, train = True)
             loss = self.criterion(output, target)
             train_loss += loss.item()
             tbar.set_description('Train loss: %.3f' % (train_loss / (i + 1)))
@@ -201,11 +199,15 @@ class TemporalTrainer(Trainer):
             if self.args.cuda:
                 image, target, random_image = image.cuda(), target.cuda(), random_image.cuda()
             with torch.no_grad():
-                output = self.temporal_model.forward_train(image, random_image)
+                output, dev_estimate, target_dev = self.temporal_model(image, random_input=random_image, train=True)
             loss = self.criterion(output, target)
             test_loss += loss.item()
 
             tbar.set_description('Test loss: %.3f' % (test_loss / (i + 1)))
+
+            if i == 0 :
+                self.summary.visualize_image_temporal(self.writer, self.args.dataset, image, target, random_image,
+                                                      output, epoch, name='_val')
 
             target = target.cpu().numpy()
             pred = np.argmax(output.data.cpu().numpy(), axis=1)

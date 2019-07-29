@@ -567,12 +567,23 @@ def get_args():
                         default=4,
                         help='discriminator_blocks (default: 4)')
 
-    # Temporal
+    # Temporal svc_kernel_size
     parser.add_argument('--separate_spatial_model_path',
                         type=str,
                         default=None,
                         help='Path to the spatial model when pretrained seperatly')
-
+    parser.add_argument('--svc_kernel_size',
+                        type=int,
+                        default=9,
+                        help='svc_kernel_size (default: 9)')
+    parser.add_argument('--train_distance',
+                        type=int,
+                        default=3000,
+                        help='svc_kernel_size (default: 9)')
+    parser.add_argument('--flow',
+                        action='store_true',
+                        default=False,
+                        help='Use feature flow for the kernel weights predictor (default: False)')
     args = parser.parse_args()
 
     args.cuda = not args.no_cuda and torch.cuda.is_available()

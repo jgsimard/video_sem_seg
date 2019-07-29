@@ -39,26 +39,14 @@ class DeepLab(nn.Module):
         self.output_shape = input.size()[2:]
         return low_level_feat
 
-    # def forward_high(self, low_level_feat, output_shape):
-    #     x = self.backbone.forward_high(low_level_feat)
-    #     x = self.aspp(x)
-    #     return x
-    #
-    # def forward_decode(self, low_level_feat, high_level_feat):
-    #     x = self.decoder(high_level_feat, low_level_feat)
-    #     x = F.interpolate(x, size=self.output_shape, mode='bilinear', align_corners=True)
-    #     return x
-
     def forward_high(self, x):
-
-        # print(f"low_level_feat.shape={x.shape}")
         x, low_level_feat = self.backbone.forward_high(x)
-
-        # print(f"x.shape={x.shape}")
         x = self.aspp(x)
         x = self.decoder(x, low_level_feat)
-        x = F.interpolate(x, size=self.output_shape, mode='bilinear', align_corners=True)
         return x
+
+    def interpolate(self, x):
+        return F.interpolate(x, size=self.output_shape, mode='bilinear', align_corners=True)
 
     def freeze_bn(self):
         for m in self.modules():

@@ -81,7 +81,7 @@ def video_scene_to_name(datasets, sampeled_images_path):
 class DeepSightTemporalRGB(Dataset):
     NUM_CLASSES = 11
 
-    def __init__(self, root_dir, split="train", sampeled_images_path="/home/deepsight/DeepSightData", train_range=100,
+    def __init__(self, root_dir, split="train", sampeled_images_path="/home/deepsight/DeepSightData", train_range=2000,
                  eval_distance=5):
         self.root_dir = root_dir
         self.split = split
@@ -123,31 +123,45 @@ class DeepSightTemporalRGB(Dataset):
     def __getitem__(self, item):
         scene = self.files['scene'][item]
         id = self.files['id'][item]
-        img_filename = join(self.imgs_dir, scene, id + ".jpg")
+        filename = id + ".jpg"
+        img_filename = join(self.imgs_dir, scene, filename)
         label_filename = join(self.masks_dir, scene, id + ".png")
         img = Image.open(img_filename)
         label = Image.open(label_filename)
 
-        number = int(id)
-        possibles = [2, 5, 10, 20, 30, 40, 50, 60, 70, 80]
-        random.shuffle(possibles)
-        random_image = None
-        for p in possibles:
-            unlabeled_path = os.path.join(self.unlabeled_dir, scene, f"{number-p}.jpg")
-            if os.path.isfile(unlabeled_path):
-                random_image = Image.open(unlabeled_path)
-                break
+        possibles = []
+        for f in os.listdir(join(self.imgs_dir, scene)):
+            d = abs(int(f.split(".")[0]) - int(filename.split(".")[0]))
+            if d <= self.train_range :
+                possibles.append(f)
+        random_filename = random.choice(possibles)
 
-        # because not finished processing
-        t = max(possibles)
-        # print(scene, number)
-        while random_image is None:
-            unlabeled_path = os.path.join(self.unlabeled_dir, scene, f"{number - t}.jpg")
-            if os.path.isfile(unlabeled_path):
-                random_image = Image.open(unlabeled_path)
-            t += 1
-            if t > 10000:
-                t = -20000
+        random_image = Image.open(join(self.imgs_dir, scene, random_filename))
+
+        # print(f"filename={filename}, possibles={possibles}, choice={random_filename}")
+
+
+        # choose from unlabeled image : DOESNT WORK !!!!!!!!!!!!!!!!!!!!1
+        # number = int(id)
+        # possibles = [0, 2, 5, 10, 20, 30, 40, 50, 60, 70, 80]
+        # random.shuffle(possibles)
+        # random_image = None
+        # for p in possibles:
+        #     unlabeled_path = os.path.join(self.unlabeled_dir, scene, f"{number-p}.jpg")
+        #     if os.path.isfile(unlabeled_path):
+        #         random_image = Image.open(unlabeled_path)
+        #         break
+        #
+        # # because not finished processing
+        # t = max(possibles)
+        # # print(scene, number)
+        # while random_image is None:
+        #     unlabeled_path = os.path.join(self.unlabeled_dir, scene, f"{number - t}.jpg")
+        #     if os.path.isfile(unlabeled_path):
+        #         random_image = Image.open(unlabeled_path)
+        #     t += 1
+        #     if t > 10000:
+        #         t = -20000
             # print(t)
 
         # extract diretly from video : SLOOOOOOOOOOOOOOOOOWWWWWWWWWWWWWWW
@@ -269,74 +283,74 @@ class DeepSightDepth(Dataset):
 if __name__ == "__main__":
     print("Testing RGB dataset")
     root_dir = "/home/deepsight/data/rgb"
-    set = "validation"
-    rgb_dataset = DeepSightRGB(root_dir, set)
-    fig = plt.figure()
-    print(len(rgb_dataset))
-    for i in range(len(rgb_dataset)):
-        sample = rgb_dataset[i]
-        img = sample['image']
-        label = sample['label']
-        print(f"id={i}, shape={img.shape}, label.shape={label.shape}, unique labels={np.unique(label)}")
-
-        # plt.imshow(np.transpose(np.asarray(img), (1, 2, 0)))
-        # plt.show()
-        # plt.imshow(sample['label'])
-        # plt.show()
-
-        break
-
-    dataloader = DataLoader(rgb_dataset,
-                            batch_size=4,
-                            shuffle=True,
-                            num_workers=4)
-
-    for i_batch, sample_batched in enumerate(dataloader):
-        print(sample_batched['image'].shape)
-        break
+    # set = "validation"
+    # rgb_dataset = DeepSightRGB(root_dir, set)
+    # fig = plt.figure()
+    # print(len(rgb_dataset))
+    # for i in range(len(rgb_dataset)):
+    #     sample = rgb_dataset[i]
+    #     img = sample['image']
+    #     label = sample['label']
+    #     print(f"id={i}, shape={img.shape}, label.shape={label.shape}, unique labels={np.unique(label)}")
+    #
+    #     # plt.imshow(np.transpose(np.asarray(img), (1, 2, 0)))
+    #     # plt.show()
+    #     # plt.imshow(sample['label'])
+    #     # plt.show()
+    #
+    #     break
+    #
+    # dataloader = DataLoader(rgb_dataset,
+    #                         batch_size=4,
+    #                         shuffle=True,
+    #                         num_workers=4)
+    #
+    # for i_batch, sample_batched in enumerate(dataloader):
+    #     print(sample_batched['image'].shape)
+    #     break
 
     print("\nTesting Depth dataset")
-    root_dir = "/home/deepsight/data/sem_seg_07_10_2019"
-    # split = "validation"
-    split = "train"
-    depth_dataset = DeepSightDepth(root_dir, split)
-    print(len(depth_dataset))
-    fig = plt.figure()
-    n = np.zeros(13)
-    for i in range(len(depth_dataset)):
-        sample = depth_dataset[i]
-        # print(sagit mple)
-        img = sample['image']
-        print(img.size())
-        label = sample['label']
-        uniques = np.unique(label).astype(int)
-        n[uniques] += 1
-        print(n)
-        # print(i, img.size(), label.size(), uniques)
-        # print(i, img.size, label.size, pc.shape, np.unique(label))
-        print(np.asarray(img).min(), np.asarray(img).max())
-
-        # # plt.imshow(np.transpose(np.asarray(img), (1, 2, 0)))
-        # # plt.imshow(np.asarray(img))
-        # plt.imshow(np.asarray(img)[0, :, :], cmap='gray')
-        # plt.title("img")
-        # plt.show()
-        # #
-        # # # plt.imshow(depth)
-        # # # plt.title("depth")
-        # # # plt.show()
-        # #
-        # plt.imshow(sample['label'])
-        # plt.title("mask")
-        # plt.show()
-
-        # for j in range(4):
-        #     plt.imshow(pc[j,:,:])
-        #     plt.show()
-        #
-        # depth_array = np.asarray(depth)
-        # print(np.asarray(label).max())
-        break
+    # root_dir = "/home/deepsight/data/sem_seg_07_10_2019"
+    # # split = "validation"
+    # split = "train"
+    # depth_dataset = DeepSightDepth(root_dir, split)
+    # print(len(depth_dataset))
+    # fig = plt.figure()
+    # n = np.zeros(13)
+    # for i in range(len(depth_dataset)):
+    #     sample = depth_dataset[i]
+    #     # print(sagit mple)
+    #     img = sample['image']
+    #     print(img.size())
+    #     label = sample['label']
+    #     uniques = np.unique(label).astype(int)
+    #     n[uniques] += 1
+    #     print(n)
+    #     # print(i, img.size(), label.size(), uniques)
+    #     # print(i, img.size, label.size, pc.shape, np.unique(label))
+    #     print(np.asarray(img).min(), np.asarray(img).max())
+    #
+    #     # # plt.imshow(np.transpose(np.asarray(img), (1, 2, 0)))
+    #     # # plt.imshow(np.asarray(img))
+    #     # plt.imshow(np.asarray(img)[0, :, :], cmap='gray')
+    #     # plt.title("img")
+    #     # plt.show()
+    #     # #
+    #     # # # plt.imshow(depth)
+    #     # # # plt.title("depth")
+    #     # # # plt.show()
+    #     # #
+    #     # plt.imshow(sample['label'])
+    #     # plt.title("mask")
+    #     # plt.show()
+    #
+    #     # for j in range(4):
+    #     #     plt.imshow(pc[j,:,:])
+    #     #     plt.show()
+    #     #
+    #     # depth_array = np.asarray(depth)
+    #     # print(np.asarray(label).max())
+    #     break
 
     print("Testing Temporal RGB dataset")
     root_dir = "/home/deepsight/data/rgb"
