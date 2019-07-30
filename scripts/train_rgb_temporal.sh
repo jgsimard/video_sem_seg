@@ -7,7 +7,7 @@ python train_temporal.py --backbone xception \
                 --workers 8 \
                 --batch-size 16 \
                 --cuda_visible_devices 2 \
-                --gpu-ids 0 \
+                --gpu-ids 0,1 \
                 --checkname deeplab-xception-flow-adv \
                 --eval-interval 1 \
                 --dataset isi_rgb_temporal \
@@ -21,6 +21,6 @@ python train_temporal.py --backbone xception \
                 --train_distance 3000 \
                 --flow \
                 --adversarial_loss \
-                --lr_ratio 0.8 \
+                --lr_ratio 1.0 \
                 --n_critic 1 \
-                --generator_loss_weight 0.001
+                --generator_loss_weight 0.0005
