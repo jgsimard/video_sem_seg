@@ -196,12 +196,13 @@ class Trainer(object):
         # Optimizers
         if self.args.ft:
             self.args.start_epoch = 0
+            self.best_pred = 0.0
         else:
             self.optimizer.load_state_dict(checkpoint['optimizer'])
             if self.args.adversarial_loss and 'discriminator_optimizer_state_dict' in checkpoint:
                 if checkpoint['discriminator_optimizer_state_dict'] is not None:
                     self.optimizer_D.load_state_dict(checkpoint['discriminator_optimizer_state_dict'])
-        self.best_pred = checkpoint['best_pred']
+            self.best_pred = checkpoint['best_pred']
 
         if self.args.print_ft:
             print(f"=> loaded checkpoint '{self.args.resume}' (epoch {checkpoint['epoch']})")
@@ -677,5 +678,5 @@ def main():
 
 
 if __name__ == "__main__":
-    os.environ["CUDA_VISIBLE_DEVICES"]="2"
+    os.environ["CUDA_VISIBLE_DEVICES"]="0"
     main()
