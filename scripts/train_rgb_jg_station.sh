@@ -3,7 +3,7 @@ CUDA_VISIBLE_DEVICES=2
 DATASET_DIR=/home/deepsight/data/rgb_corrected
 #DATASET_DIR = /home/deepsight2/development/data/rgb
 
-python train.py --backbone resnet \
+python ../train.py --backbone resnet \
                 --lr 0.0001 \
                 --workers 8 \
                 --batch-size 12 \

@@ -355,6 +355,9 @@ class Trainer(object):
 
             tbar.set_description('Test loss: %.3f' % (test_loss / (i + 1)))
 
+            if i == 0:
+                self.summary.visualize_image(self.writer, self.args.dataset, image, target, output, epoch, name="_val")
+
             target = target.cpu().numpy()
             pred = np.argmax(output.data.cpu().numpy(), axis=1)
 
@@ -568,7 +571,7 @@ def get_args():
                         default=4,
                         help='discriminator_blocks (default: 4)')
 
-    # Temporal svc_kernel_size
+    # Temporal
     parser.add_argument('--separate_spatial_model_path',
                         type=str,
                         default=None,
@@ -585,6 +588,25 @@ def get_args():
                         action='store_true',
                         default=False,
                         help='Use feature flow for the kernel weights predictor (default: False)')
+
+    # Demo
+    parser.add_argument('--demo_camera',
+                        action='store_true',
+                        default=False,
+                        help='Use camera for live demo (default: False)')
+    parser.add_argument('--demo_folders',
+                        type=str,
+                        default=None,
+                        help='List of folders containing image on which to do inference')
+    parser.add_argument('--demo_video_path',
+                        type=str,
+                        default=None,
+                        help='path to a video to be processed')
+    parser.add_argument('--demo_video_output',
+                        type=str,
+                        default=None,
+                        help='path to a video to be processed')
+
     args = parser.parse_args()
 
     args.cuda = not args.no_cuda and torch.cuda.is_available()
@@ -622,7 +644,7 @@ def get_args():
             'coco': 0.1,
             'cityscapes': 0.01,
             'pascal': 0.007,
-            'isi': 0.01,
+            'isi_rgb': 0.01,
         }
         args.lr = lrs[args.dataset.lower()] / (4 * len(args.gpu_ids)) * args.batch_size
 
@@ -678,5 +700,5 @@ def main():
 
 
 if __name__ == "__main__":
-    os.environ["CUDA_VISIBLE_DEVICES"]="0"
+    os.environ["CUDA_VISIBLE_DEVICES"]="2"
     main()

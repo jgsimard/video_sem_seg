@@ -40,7 +40,6 @@ class Normalize(object):
 
         if self.multiview:
             pointcloud = sample['pointcloud']
-
         else:
             pointcloud = -1
 
@@ -169,7 +168,7 @@ class RandomScaleCrop(object):
         self.base_size = base_size
         self.crop_size = crop_size
         self.fill = fill
-        self.scales = (0.5, 1.5)
+        self.scales = scales
         self.temporal = temporal
 
     def __call__(self, sample):
@@ -207,7 +206,7 @@ class RandomScaleCrop(object):
                 random_image = ImageOps.expand(random_image, border=(0, 0, padw, padh), fill=0)
             random_image = random_image.crop((x1, y1, x1 + self.crop_size[1], y1 + self.crop_size[0]))
         else:
-            random_image = None
+            random_image = -1
 
         return {'image': img,
                 'label': mask,
@@ -242,7 +241,9 @@ class FixScaleCrop(object):
             random_image = random_image.resize((ow, oh), Image.BILINEAR)
             random_image = random_image.crop((x1, y1, x1 + self.crop_size, y1 + self.crop_size))
         else:
-            random_image = None
+            random_image = -1
+
+        # print(img.size)
         return {'image': img,
                 'label': mask,
                 'random_image': random_image}

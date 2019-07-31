@@ -1,28 +1,15 @@
 import os
-import os
 
 import numpy as np
 import torch
 from tqdm import tqdm
 
 from models.afp import LowLatencyModel
-# from models.modeling.deeplab import *
 from models.modeling.deeplab import DeepLab
+from models.modeling.sync_batchnorm.replicate import patch_replication_callback
+# from models.modeling.deeplab import *
 from train import Trainer, get_args
 from utils.lr_scheduler import LR_Scheduler
-
-from datasets import make_data_loader
-from models.modeling.deeplab import DeepLab
-from models.modeling.discriminator import Discriminator, onehot
-from models.modeling.sync_batchnorm.replicate import patch_replication_callback
-from models.network_initialization import init_net
-from utils.calculate_weights import calculate_weigths_labels
-from utils.loss import SegmentationLosses
-from utils.lr_scheduler import LR_Scheduler
-from utils.metrics import Evaluator
-from utils.saver import Saver
-from utils.summaries import TensorboardSummary
-
 
 
 class TemporalTrainer(Trainer):
@@ -41,7 +28,8 @@ class TemporalTrainer(Trainer):
         for param in self.spatial_model.parameters():
             param.requires_grad = False
 
-        self.temporal_model = LowLatencyModel(self.spatial_model, kernel_size=self.args.svc_kernel_size, flow=self.args.flow)
+        self.temporal_model = LowLatencyModel(self.spatial_model, kernel_size=self.args.svc_kernel_size,
+                                              flow=self.args.flow)
         self.define_optimizer()
 
         if args.adversarial_loss:
@@ -84,7 +72,8 @@ class TemporalTrainer(Trainer):
         self.best_spatial_pred = checkpoint['best_pred']
 
         if self.args.print_ft:
-            print(f"=> loaded spatial checkpoint '{self.args.separate_spatial_model_path}' (best pred {self.best_spatial_pred})")
+            print(
+                f"=> loaded spatial checkpoint '{self.args.separate_spatial_model_path}' (best pred {self.best_spatial_pred})")
 
     def resume_model(self):
         if not os.path.isfile(self.args.resume):
@@ -159,7 +148,7 @@ class TemporalTrainer(Trainer):
                 image, target, random_image = image.cuda(), target.cuda(), random_image.cuda()
             self.scheduler(self.optimizer, i, epoch, self.best_pred)
             self.optimizer.zero_grad()
-            output, dev_estimate, target_dev = self.temporal_model(image, random_input=random_image, train = True)
+            output, dev_estimate, target_dev = self.temporal_model(image, random_input=random_image, train=True)
             loss = self.criterion(output, target)
             train_loss += loss.item()
             tbar.set_description('Train loss: %.3f' % (train_loss / (i + 1)))
@@ -205,7 +194,7 @@ class TemporalTrainer(Trainer):
 
             tbar.set_description('Test loss: %.3f' % (test_loss / (i + 1)))
 
-            if i == 0 :
+            if i == 0:
                 self.summary.visualize_image_temporal(self.writer, self.args.dataset, image, target, random_image,
                                                       output, epoch, name='_val')
 

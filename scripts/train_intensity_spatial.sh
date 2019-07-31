@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-CUDA_VISIBLE_DEVICES=0
-#DATASET_DIR=/home/deepsight/data/sem_seg_07_10_2019 # intensity OR
-DATASET_DIR=/home/deepsight/data/sem_seg_multiview_07_10_2019/ # intensity OR
+CUDA_VISIBLE_DEVICES=2
+DATASET_DIR=/home/deepsight/data/sem_seg_07_10_2019 # intensity OR
+#DATASET_DIR=/home/deepsight/data/sem_seg_multiview_07_10_2019/ # intensity OR
 python train.py --backbone xception \
                 --lr 0.0001 \
                 --workers 8 \
@@ -10,8 +10,8 @@ python train.py --backbone xception \
                 --gpu-ids 0 \
                 --eval-interval 1 \
                 --dataset isi_intensity \
-                --checkname multiview-deeplab-xception-adv \
-                --epochs 300 \
+                --checkname deeplab-xception-adv \
+                --epochs 400 \
                 --dataset_dir $DATASET_DIR \
                 --optimizer Adam \
                 --adversarial_loss \
