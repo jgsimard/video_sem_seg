@@ -24,6 +24,7 @@ class Evaluator(object):
         MIoU = np.diag(self.confusion_matrix) / (
                     np.sum(self.confusion_matrix, axis=1) + np.sum(self.confusion_matrix, axis=0) -
                     np.diag(self.confusion_matrix))
+        print(MIoU)
         MIoU = np.nanmean(MIoU)
         return MIoU
 

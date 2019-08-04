@@ -13,44 +13,22 @@ from datasets.multiview_info import *
 import matplotlib.pyplot as plt
 
 
-def visualize(image, soft_label):
+def visualize(image, soft_label, depth):
     # some visualization
     grid_image = make_grid(image[:4].clone().cpu().data, 4, normalize=True)
     plt.imshow(np.transpose(grid_image, (1, 2, 0)))
     plt.show()
+
     hard_label = torch.max(soft_label[:4], 1)[1]
     grid_image = make_grid(
         decode_seg_map_sequence(hard_label.clone().cpu().numpy(),
                                 dataset='isi_multiview'), 4, normalize=False, range=(0, 255))
     plt.imshow(np.transpose(grid_image, (1, 2, 0)))
     plt.show()
-    # for i in range(CAM_NUM):
-    #     plt.imshow(soft_label[i, 0, :, :].clone().cpu().numpy())
-    #     plt.show()
-    #     plt.imshow(soft_label[i, 1, :, :].clone().cpu().numpy())
-    #     plt.show()
-    #     plt.imshow(soft_label[i, 2, :, :].clone().cpu().numpy())
-    #     plt.show()
-    #     plt.imshow(soft_label[i, 3, :, :].clone().cpu().numpy())
-    #     plt.show()
-    #     plt.imshow(soft_label[i, 4, :, :].clone().cpu().numpy())
-    #     plt.show()
-    #     plt.imshow(soft_label[i, 5, :, :].clone().cpu().numpy())
-    #     plt.show()
-    #     plt.imshow(soft_label[i, 6, :, :].clone().cpu().numpy())
-    #     plt.show()
-    #     plt.imshow(soft_label[i, 7, :, :].clone().cpu().numpy())
-    #     plt.show()
-    #     plt.imshow(soft_label[i, 8, :, :].clone().cpu().numpy())
-    #     plt.show()
-    #     plt.imshow(soft_label[i, 9, :, :].clone().cpu().numpy())
-    #     plt.show()
-    #     plt.imshow(soft_label[i, 10, :, :].clone().cpu().numpy())
-    #     plt.show()
-    #     plt.imshow(soft_label[i, 11, :, :].clone().cpu().numpy())
-    #     plt.show()
-    #     plt.imshow(soft_label[i, 12, :, :].clone().cpu().numpy())
-    #     plt.show()
+
+    grid_image = make_grid(depth.cpu().view(4, 1, HEIGHT, WIDTH), 4, normalize=False, range=(0, 255))
+    plt.imshow(np.transpose(grid_image, (1, 2, 0)))
+    plt.show()
 
 
 class DeepLabMultiView(nn.Module):
@@ -60,14 +38,14 @@ class DeepLabMultiView(nn.Module):
 
         self.deeplab = DeepLab(backbone=backbone, output_stride=output_stride,
                                num_classes=num_classes, sync_bn=sync_bn,
-                               freeze_bn=freeze_bn)
+                               freeze_bn=freeze_bn, pretrained=False)
 
         if sync_bn == True:
             BatchNorm = SynchronizedBatchNorm2d
         else:
             BatchNorm = nn.BatchNorm2d
 
-        self.merger = build_merger(num_classes, BatchNorm)
+        self.merger = build_merger(num_classes)
 
         self.num_classes = num_classes
 
@@ -106,7 +84,7 @@ class DeepLabMultiView(nn.Module):
             # print(x.max())
             # print(x.min())
             soft_label_singleview[b, :, :, :, :] = x
-            # visualize(image[b, :, :, :, :], x)
+            # visualize(image[b, :, :, :, :], x, pointcloud[b, :, 2, :, :])
 
         # merge the labels
         soft_label_multiview, label = self.merger(soft_label_singleview, pointcloud, label)
@@ -116,6 +94,8 @@ class DeepLabMultiView(nn.Module):
 
 if __name__ == "__main__":
     import torchsummary
+    import time
+    # import torch2trt
 
     model = DeepLabMultiView(backbone='resnet', output_stride=16, num_classes=13).cuda()
     model.eval()
@@ -123,10 +103,18 @@ if __name__ == "__main__":
     torchsummary.summary(model.deeplab, (3, 287, 352))
 
     batch = 1
-    image = torch.rand(batch, 4, 3, 287, 352)
-    pointcloud = torch.rand(batch, 4, 3, 287, 352)
-    label = torch.randint(high=12, size=(batch, 4, 287, 352))
+    image = torch.rand(batch, 4, 3, 287, 352).cuda()
+    pointcloud = torch.rand(batch, 4, 3, 287, 352).cuda()
+    label = torch.randint(high=12, size=(batch, 4, 287, 352)).cuda()
+    start = time.time()
     output = model(image, pointcloud, label)
+    end = time.time()
+    print(end - start)
 
     for o in output:
         print(o.size())
+
+    # model_trt = torch2trt(model, [image, pointcloud, label])
+    start = time.time()
+    output = model(image, pointcloud, label)
+    end = time.time()

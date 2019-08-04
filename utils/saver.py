@@ -54,6 +54,7 @@ class Saver(object):
         p['epoch'] = self.args.epochs
         p['base_size'] = self.args.base_size
         p['crop_size'] = self.args.crop_size
+        p['generator_loss_weight'] = self.args.generator_loss_weight
 
         for key, val in p.items():
             log_file.write(key + ':' + str(val) + '\n')

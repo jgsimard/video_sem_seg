@@ -4,8 +4,8 @@ from torch.utils.data import Dataset
 from mypath import Path
 from tqdm import trange
 import os
-from pycocotools.coco import COCO
-from pycocotools import mask
+# from pycocotools.coco import COCO
+# from pycocotools import mask
 from torchvision import transforms
 from datasets import custom_transforms as tr
 from PIL import Image, ImageFile

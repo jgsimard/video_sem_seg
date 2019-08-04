@@ -9,11 +9,36 @@ import matplotlib.pyplot as plt
 from models.modeling.sync_batchnorm.batchnorm import SynchronizedBatchNorm2d
 
 from torchvision import transforms
-from datasets.custom_transform_multichannel import ToNumpy, ToTensor, RandomDropOut
+from datasets.custom_transform_multichannel import ToNumpy, ToTensor, RandomDropOut, RandomNoise
 from datasets.multiview_info import *
 
 from models.modeling.unet_model import UNet
 import albumentations as aug
+
+
+def visualize(label, feature, num_classes, concat):
+    plt.imshow(label.clone().cpu().data)
+    plt.title('label')
+    plt.show()
+    if concat:
+        for camid in range(CAM_NUM):
+            for c in range(num_classes):
+                plt.imshow(feature[camid * (num_classes + 1) + c, :, :].clone().cpu().data)
+                plt.title('camera %d, projected feature %d' % (camid, c))
+                plt.show()
+            plt.imshow(feature[(camid + 1) * (num_classes + 1) - 1, :, :].clone().cpu().data, cmap='gray')
+            plt.title('depth')
+            plt.show()
+
+    else:
+        for camid in range(CAM_NUM):
+            for c in range(num_classes):
+                plt.imshow(feature[camid, c, :, :].clone().cpu().data)
+                plt.title('camera %d, projected feature %d' % (camid, c))
+                plt.show()
+            plt.imshow(feature[camid, num_classes, :, :].clone().cpu().data, cmap='gray')
+            plt.title('camera %d, depth' % camid)
+            plt.show()
 
 
 def project_point_cloud(xyz_pts, feature_src, cam_intrinsics_target, flip_horizontally=0, flip_vertically=1):
@@ -114,31 +139,17 @@ def transform_point_cloud(xyz_src, T_src, T_target):
 class Merger(nn.Module):
     """ Augmentation has to be put here due to projection"""
 
-    def __init__(self, num_classes, BatchNorm):
+    def __init__(self, num_classes):
         super(Merger, self).__init__()
         self.num_classes = num_classes
-
-        # self.conv = nn.Sequential(
-        #     nn.Conv2d(CAM_NUM * (num_classes + 1), CAM_NUM * (num_classes + 1) * 2, kernel_size=3, stride=1, padding=1,
-        #               bias=False),
-        #     BatchNorm(CAM_NUM * (num_classes + 1) * 2),
-        #     nn.ReLU(),
-        #     nn.Dropout(0.5),
-        #     nn.Conv2d(CAM_NUM * (num_classes + 1) * 2, CAM_NUM * (num_classes + 1), kernel_size=3, stride=1, padding=1,
-        #               bias=False),
-        #     BatchNorm(CAM_NUM * (num_classes + 1)),
-        #     nn.ReLU(),
-        #     nn.Dropout(0.1),
-        #     nn.Conv2d(CAM_NUM * (num_classes + 1), num_classes, kernel_size=1, stride=1))
 
         self.unet = UNet(n_channels=(self.num_classes + 1) * CAM_NUM, n_classes=self.num_classes)
         self._init_weight()
 
         self.transform_train = aug.Compose([
-            aug.HorizontalFlip(p=0.7),
-            aug.ShiftScaleRotate(p=0.7, rotate_limit=30),
-            aug.OneOf([aug.Blur(p=0.5, blur_limit=5), aug.GaussNoise(p=0.5)])
-
+            aug.HorizontalFlip(p=0.5),
+            aug.ShiftScaleRotate(p=0.7, rotate_limit=30, border_mode=0),
+            aug.OneOf([aug.Blur(p=0.7, blur_limit=3), RandomNoise(p=0.7)]),
         ])
 
         self.scale = 10.0
@@ -160,16 +171,16 @@ class Merger(nn.Module):
         batch = feature.shape[0]
         soft_label = torch.empty(batch, CAM_NUM, self.num_classes, HEIGHT, WIDTH).cuda()
         z = xyzi[:, :, 2, :, :].float()
-        # z = (xyz[:, :, 2, :, :] - 0.9473) / 0.7460  # BxCAM_NUMxHxW
-        # z = z.type(torch.float)
 
         for camid_target in range(CAM_NUM):
-            feature_tmp_projected = torch.zeros(
+            # project all camera prediction to the target camera
+            # the feature_tmp_projected will be B x CAM_NUM x (C+1) x H x W
+            feature_all_projected = torch.zeros(
                 [batch, CAM_NUM, self.num_classes + 1, HEIGHT, WIDTH]).cuda()  # BxCAM_NUMx(C+1)xHxW
 
             for camid_src in range(CAM_NUM):
                 # combine feature and depth
-                feature_tmp = torch.cat(
+                feature_src = torch.cat(
                     (feature[:, camid_src, :, :, :], z[:, camid_src, :, :].view(batch, 1, HEIGHT, WIDTH)),
                     dim=1)  # Bx(C+1)xHxW
 
@@ -178,51 +189,43 @@ class Merger(nn.Module):
                     # transform
                     xyz_tmp = transform_point_cloud(xyzi[:, camid_src, 0:3, :, :], T[camid_src], T[camid_target])
                     # project feature
-                    feature_tmp_projected[:, camid_src, :, :, :] = project_point_cloud(xyz_tmp, feature_tmp,
+                    feature_all_projected[:, camid_src, :, :, :] = project_point_cloud(xyz_tmp, feature_src,
                                                                                        CAM_MTX[camid_target])
                 else:
-                    feature_tmp_projected[:, camid_src, :, :, :] = feature_tmp
+                    feature_all_projected[:, camid_src, :, :, :] = feature_src
 
             # reorder feature (feature from target, i.e. itself, will always be first, the rest will be randomized)
             order = torch.randperm(CAM_NUM).cuda()
             order = order[order != camid_target]
             order = torch.cat((torch.tensor([camid_target]).cuda(), order))
-            feature_tmp_projected = torch.index_select(feature_tmp_projected, 1, order)
+            feature_all_projected = torch.index_select(feature_all_projected, 1, order)
 
-            # TODO: dropout
-            # if self.training:
-            #     for b in range(batch):
-            #        feature_tmp_projected[b, :, :, :, :] = RandomDropOut(feature_tmp_projected[b, :, :, :, :], CAM_NUM,
-                                                                         p=0.5)
+            # # some visualization
+            # visualize(label[0, camid_target, :, :], feature_all_projected[0, :, :, :, :], self.num_classes,
+            #           concat=False)
+
+            # augmentation and dropout
+            if self.training:
+                for b in range(batch):
+                    # only transform the label for the current camera
+                    curr_feature = feature_all_projected[b, :, :, :, :]
+                    curr_label = label[b, camid_target, :, :].view(1, HEIGHT, WIDTH)
+                    sample = ToNumpy({'image': curr_feature, 'label': curr_label})
+                    sample = self.transform_train(image=sample['image'], mask=sample['label'])
+                    sample = ToTensor(sample, batch=CAM_NUM, channel=self.num_classes + 1)
+                    feature_all_projected[b, :, :, :, :] = sample['image']
+                    label[b, camid_target, :, :] = sample['label']
+                    # drop out
+                    feature_all_projected[b, :, :, :, :] = RandomDropOut(feature_all_projected[b, :, :, :, :], CAM_NUM,
+                                                                         p=0.0)
+            # normalization
+            feature_all_projected = feature_all_projected / self.scale
 
             # reformat the tensor to become BxCAM_NUM*(C+1)xHxW for network to process
-            feature_target = feature_tmp_projected.view(batch, -1, HEIGHT, WIDTH).cuda()  # B x C x H x W
+            feature_target = feature_all_projected.view(batch, -1, HEIGHT, WIDTH).cuda()  # B x C x H x W
 
-            # # TODO: augmentation
-            # if self.training:
-            #     # only transform the label for the current camera
-            #     sample = ToNumpy({'image': feature_target, 'label': label[:, camid_target, :, :]})
-            #     sample = self.transform_train({'image': sample['image'], 'label': sample['label']})
-            #     sample = ToTensor(sample, batch=batch, channel=CAM_NUM * (self.num_classes + 1))
-            #     feature_target = sample['image']
-            #     label[:, camid_target, :, :] = sample['label']
-            #
             # # some visualization
-            # plt.imshow(label[0, camid_target, :, :].clone().cpu().data)
-            # plt.title('label')
-            # plt.show()
-            # for camid in range(CAM_NUM):
-            #     for c in range(self.num_classes):
-            #         plt.imshow(feature_target[0, camid * (self.num_classes + 1) + c, :, :].clone().cpu().data)
-            #         plt.title('camera %d, projected feature %d' % (camid, c))
-            #         plt.show()
-            #     plt.imshow(feature_target[0, (camid + 1) * (self.num_classes + 1) - 1, :, :].clone().cpu().data,
-            #                cmap='gray')
-            #     plt.title('depth')
-            #     plt.show()
-
-            # normalization
-            feature_target = feature_target / self.scale
+            # visualize(label[0, camid_target, :, :], feature_target[0, :, :, :], self.num_classes, concat=True)
 
             # go through network
             soft_label[:, camid_target, :, :, :] = self.unet(feature_target)
@@ -241,15 +244,15 @@ class Merger(nn.Module):
                 m.bias.data.zero_()
 
 
-def build_merger(num_classes, BatchNorm):
-    return Merger(num_classes, BatchNorm)
+def build_merger(num_classes):
+    return Merger(num_classes)
 
 
 if __name__ == "__main__":
     from models.modeling.sync_batchnorm.batchnorm import SynchronizedBatchNorm2d
     from datasets.isi_multiview import DeepSightDepthMultiview
 
-    merger = build_merger(13, SynchronizedBatchNorm2d)
+    merger = build_merger(13)
     merger = merger.cuda()
 
     print("Testing Depth dataset")
@@ -271,7 +274,8 @@ if __name__ == "__main__":
         label = label.cuda()
         pc = pc.cuda()
 
-        feature_input = torch.empty([2, CAM_NUM, 13, HEIGHT, WIDTH]).cuda()  # 13 times channels
+        feature_input = img[:, :, 0, :, :].view(2, 4, 1, HEIGHT, WIDTH)
+        feature_input = feature_input.repeat(1, 1, 13, 1, 1)  # 13 times channels
         print(feature_input.shape)
 
         scores = merger(feature_input, pc, label)
