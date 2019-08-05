@@ -1,113 +1,49 @@
 import argparse
 import os
+import random
+
 import numpy as np
+import torch
 from tqdm import tqdm
 
-import torch
-
-from mypath import Path
+import models.convcrf as convcrf
 from datasets import make_data_loader
-from models.modeling.sync_batchnorm.replicate import patch_replication_callback
-# from models.modeling.deeplab import *
 from models.modeling.deeplab import DeepLab
-from utils.loss import SegmentationLosses
+from models.modeling.discriminator import Discriminator, onehot
+from models.modeling.sync_batchnorm.replicate import patch_replication_callback
+from models.network_initialization import init_net
 from utils.calculate_weights import calculate_weigths_labels
+from utils.loss import SegmentationLosses
 from utils.lr_scheduler import LR_Scheduler
+from utils.metrics import Evaluator
 from utils.saver import Saver
 from utils.summaries import TensorboardSummary
-from utils.metrics import Evaluator
 
-import models.convcrf as convcrf
-
-def onehot(targets, num_classes):
-    """Origin: https://github.com/moskomule/mixup.pytorch
-    convert index tensor into onehot tensor
-    :param targets: index tensor
-    :param num_classes: number of classes
-    """
-    # assert isinstance(targets, torch.LongTensor)
-    return torch.zeros(targets.size()[0], num_classes).scatter_(1, targets.view(-1, 1), 1)
-
-def mixup(inputs, targets, num_classes, alpha=0.4):
-    """Mixup on 1x32x32 mel-spectrograms.
-    """
-    s = inputs.size()[0]
-    weight = torch.Tensor(np.random.beta(alpha, alpha, s))
-    index = np.random.permutation(s)
-    x1, x2 = inputs, inputs[index, :, :, :]
-    y1, y2 = onehot(targets, num_classes), onehot(targets[index,], num_classes)
-    weight = weight.view(s, 1, 1, 1)
-    inputs = weight*x1 + (1-weight)*x2
-    weight = weight.view(s, 1)
-    targets = weight*y1 + (1-weight)*y2
-    return inputs, targets
 
 class Trainer(object):
     def __init__(self, args):
         self.args = args
+        self.prepare_saver()
+        self.prepare_tensorboard()
+        self.prepare_dataloader()
 
-        # Define Saver
-        self.saver = Saver(args)
-        self.saver.save_experiment_config()
-        # Define Tensorboard Summary
-        self.summary = TensorboardSummary(self.saver.experiment_dir)
-        self.writer = self.summary.create_summary()
+        self.model = DeepLab(num_classes=self.nclass,
+                             backbone=args.backbone,
+                             output_stride=args.out_stride,
+                             sync_bn=args.sync_bn,
+                             freeze_bn=args.freeze_bn)
+        self.build_crf()
+        self.define_optimizer()
 
-        # Define Dataloader
-        kwargs = {'num_workers': args.workers, 'pin_memory': True}
-        self.train_loader, self.val_loader, self.test_loader, self.nclass = make_data_loader(args, **kwargs)
-
-        # Define network
-        model = DeepLab(num_classes=self.nclass,
-                        backbone=args.backbone,
-                        output_stride=args.out_stride,
-                        sync_bn=args.sync_bn,
-                        freeze_bn=args.freeze_bn)
-
-        self.crf = None
-        if args.GaussCrf:
-            if self.args.TrainCrf:
-                conf = convcrf.isi_trainable_conf
-            else:
-                conf = convcrf.isi_untrainable_conf
-
-            if args.dataset =="isi_rgb":
-                shape = (513, 513)
-            elif args.dataset == "isi_intensity":
-                shape = (287,352)
-
-            self.crf = convcrf.GaussCRF(conf=conf, shape=shape, nclasses=self.nclass)
-
-        train_params = [{'params': model.get_1x_lr_params(), 'lr': args.lr},
-                        {'params': model.get_10x_lr_params(), 'lr': args.lr * 10}]
-
-        # Define Optimizer
-        optimizer = torch.optim.SGD(train_params, momentum=args.momentum,
-                                    weight_decay=args.weight_decay, nesterov=args.nesterov)
-
-        # Define Criterion
-        # whether to use class balanced weights
-        if args.use_balanced_weights:
-            classes_weights_path = os.path.join(Path.db_root_dir(args.dataset), args.dataset + '_classes_weights.npy')
-            if os.path.isfile(classes_weights_path):
-                weight = np.load(classes_weights_path)
-            else:
-                weight = calculate_weigths_labels(args.dataset, self.train_loader, self.nclass)
-            weight = torch.from_numpy(weight.astype(np.float32))
+        if args.adversarial_loss:
+            self.build_adverserial_model()
         else:
-            weight = None
-        self.criterion = SegmentationLosses(weight=weight, cuda=args.cuda).build_loss(mode=args.loss_type)
-        self.model, self.optimizer = model, optimizer
+            self.discriminator = None
+            self.optimizer_D = None
 
-        # Define Evaluator
+        self.define_pixel_criterion()
+        self.define_evaluators()
 
-        if self.args.dataset == "isi_intensity":
-            weights = np.array([1, 1, 1, 1, 1, 1, 0, 1, 1, 0, 0, 1, 1]) > 0.5
-        else:
-            weights = None
-
-        self.evaluator = Evaluator(self.nclass, weights)
-        self.evaluator_crf = Evaluator(self.nclass, weights)
         # Define lr scheduler
         self.scheduler = LR_Scheduler(args.lr_scheduler,
                                       args.lr,
@@ -115,46 +51,223 @@ class Trainer(object):
                                       len(self.train_loader))
 
         # Using cuda
-        if args.cuda:
-            self.model = torch.nn.DataParallel(self.model, device_ids=self.args.gpu_ids)
-            patch_replication_callback(self.model)
-            self.model = self.model.cuda()
-
-            if args.GaussCrf:
-                self.crf = torch.nn.DataParallel(self.crf, device_ids=self.args.gpu_ids)
-                patch_replication_callback(self.crf)
-                self.crf = self.crf.cuda()
+        if self.args.cuda:
+            self.model_on_cuda()
 
         # Resuming checkpoint
         self.best_pred = 0.0
         if args.resume is not None:
-            if not os.path.isfile(args.resume):
-                raise RuntimeError(f"=> no checkpoint found at '{args.resume}'")
-            checkpoint = torch.load(args.resume)
-            args.start_epoch = checkpoint['epoch']
-            if args.cuda:
-                self.model.module.load_state_dict(checkpoint['state_dict'])
-                if args.GaussCrf and 'crf_state_dict' in checkpoint:
-                    if checkpoint['crf_state_dict'] is not None:
-                        print("loading crf")
-                        self.crf.module.load_state_dict(checkpoint['crf_state_dict'])
-            else:
-                self.model.load_state_dict(checkpoint['state_dict'])
-                if args.GaussCrf and 'crf_state_dict' in checkpoint:
-                    if checkpoint['crf_state_dict'] is not None:
-                        print("loading crf")
-                        self.crf.load_state_dict(checkpoint['crf_state_dict'])
-            if not args.ft:
-                self.optimizer.load_state_dict(checkpoint['optimizer'])
-            self.best_pred = checkpoint['best_pred']
-            print(f"=> loaded checkpoint '{args.resume}' (epoch {checkpoint['epoch']})")
+            self.resume_model()
 
-        # for name, param in self.model.module.named_parameters():
-        #     print(f"{name}, {param}")
-        # print(self.model.module)
-        # Clear start epoch if fine-tuning
-        if args.ft:
-            args.start_epoch = 0
+    def prepare_saver(self):
+        self.saver = Saver(self.args)
+        self.saver.save_experiment_config()
+
+    def prepare_tensorboard(self):
+        self.summary = TensorboardSummary(self.saver.experiment_dir)
+        self.writer = self.summary.create_summary()
+
+    def prepare_dataloader(self):
+        kwargs = {'num_workers': self.args.workers, 'pin_memory': True}
+        self.train_loader, self.val_loader, self.test_loader, self.nclass = make_data_loader(self.args, **kwargs)
+
+    def define_evaluators(self):
+        if self.args.dataset == "isi_intensity":
+            weights = np.array([1, 1, 1, 1, 1, 1, 0, 1, 1, 0, 0, 1, 1]) > 0.5
+
+        if (self.args.dataset == "isi_rgb" or self.args.dataset =="isi_rgb_temporal") and self.args.skip_classes is not None:
+            weights = self.args.skip_weights > 0.5
+        else:
+            weights = None
+
+        self.evaluator = Evaluator(self.nclass, weights)
+        self.evaluator_crf = Evaluator(self.nclass, weights)
+
+    def define_optimizer(self):
+        if self.args.optimizer == 'SGD':
+            self.optimizer = torch.optim.SGD(self.model.parameters(),
+                                             lr=self.args.lr,
+                                             momentum=self.args.momentum,
+                                             weight_decay=self.args.weight_decay,
+                                             nesterov=self.args.nesterov)
+        elif self.args.optimizer == 'Adam':
+            self.optimizer = torch.optim.Adam(self.model.parameters(),
+                                              lr=self.args.lr,
+                                              weight_decay=self.args.weight_decay)
+        else:
+            raise RuntimeError(f"Chosen optimizer is not usable !!!")
+
+    def define_pixel_criterion(self):
+        if self.args.use_balanced_weights:
+            classes_weights_path = os.path.join(self.args.dataset_dir, 'classes_weights.npy')
+            if os.path.isfile(classes_weights_path):
+                weight = np.load(classes_weights_path)
+            else:
+                weight = calculate_weigths_labels(self.args.dataset_dir, self.train_loader, self.nclass)
+            weight = torch.from_numpy(weight.astype(np.float32))
+            print(f"Classes weights : {weight}")
+
+        elif self.args.skip_classes is not None:
+            weight = torch.from_numpy(self.args.skip_weights.astype(np.float32))
+            print(f"Classes weights : {weight}")
+        else:
+            weight = None
+        self.criterion = SegmentationLosses(weight=weight, cuda=self.args.cuda).build_loss(mode=self.args.loss_type)
+
+    def build_adverserial_model(self):
+        self.adv_loss = torch.nn.MSELoss()
+        self.generator_loss_weight = self.args.generator_loss_weight
+        self.gradient_penalty_weight = self.args.gradient_penalty_weight
+        self.n_critic = self.args.n_critic
+        self.train_d = False
+        print('Define discriminator')
+        self.discriminator = Discriminator(input_nc=self.nclass,
+                                           img_height=self.args.img_shape[0],
+                                           img_width=self.args.img_shape[1],
+                                           filter_base=16,
+                                           n_iter=self.args.n_critic,
+                                           generator_loss_weight=self.args.generator_loss_weight,
+                                           lr_ratio=self.args.lr_ratio,
+                                           gp_weigth=self.args.gradient_penalty_weight,
+                                           num_block=self.args.discriminator_blocks)
+        self.discriminator = init_net(self.discriminator,
+                                      type='kaiming',
+                                      activation_mode='relu',
+                                      distribution='normal')
+        print('Add optimizer for discriminator')
+        self.optimizer_D = torch.optim.Adam(self.discriminator.parameters(),
+                                            lr=self.args.lr * self.args.lr_ratio,
+                                            weight_decay=self.args.weight_decay)
+
+    def build_crf(self):
+        self.crf = None
+        if self.args.GaussCrf:
+            if self.args.TrainCrf:
+                conf = convcrf.isi_trainable_conf
+            else:
+                conf = convcrf.isi_untrainable_conf
+
+            if self.args.dataset == "isi_rgb":
+                shape = (513, 513)
+            elif self.args.dataset == "isi_intensity":
+                shape = (287, 352)
+
+            self.crf = convcrf.GaussCRF(conf=conf, shape=shape, nclasses=self.nclass)
+
+    def model_on_cuda(self):
+        self.model = torch.nn.DataParallel(self.model, device_ids=self.args.gpu_ids)
+        patch_replication_callback(self.model)
+        self.model = self.model.cuda()
+
+        if self.args.GaussCrf:
+            self.crf = torch.nn.DataParallel(self.crf, device_ids=self.args.gpu_ids)
+            patch_replication_callback(self.crf)
+            self.crf = self.crf.cuda()
+
+        if self.args.adversarial_loss:
+            self.discriminator = torch.nn.DataParallel(self.discriminator, device_ids=self.args.gpu_ids)
+            patch_replication_callback(self.discriminator)
+            self.discriminator = self.discriminator.cuda()
+
+    def resume_model(self):
+        if not os.path.isfile(self.args.resume):
+            raise RuntimeError(f"=> no checkpoint found at '{self.args.resume}'")
+        checkpoint = torch.load(self.args.resume)
+        self.args.start_epoch = checkpoint['epoch']
+
+        # Model + Discriminator
+        if self.args.cuda:
+            self.model.module.load_state_dict(checkpoint['state_dict'])
+            if self.args.GaussCrf and 'crf_state_dict' in checkpoint:
+                if checkpoint['crf_state_dict'] is not None:
+                    self.crf.module.load_state_dict(checkpoint['crf_state_dict'])
+            if self.args.adversarial_loss and 'discriminator_state_dict' in checkpoint:
+                if checkpoint['discriminator_state_dict'] is not None:
+                    self.discriminator.module.load_state_dict(checkpoint['discriminator_state_dict'])
+        else:
+            self.model.load_state_dict(checkpoint['state_dict'])
+            if self.args.GaussCrf and 'crf_state_dict' in checkpoint:
+                if checkpoint['crf_state_dict'] is not None:
+                    self.crf.load_state_dict(checkpoint['crf_state_dict'])
+            if self.args.adversarial_loss and 'discriminator_state_dict' in checkpoint:
+                if checkpoint['discriminator_state_dict'] is not None:
+                    self.discriminator.load_state_dict(checkpoint['discriminator_state_dict'])
+
+        # Optimizers
+        if self.args.ft:
+            self.args.start_epoch = 0
+            self.best_pred = 0.0
+        else:
+            self.optimizer.load_state_dict(checkpoint['optimizer'])
+            if self.args.adversarial_loss and 'discriminator_optimizer_state_dict' in checkpoint:
+                if checkpoint['discriminator_optimizer_state_dict'] is not None:
+                    self.optimizer_D.load_state_dict(checkpoint['discriminator_optimizer_state_dict'])
+            self.best_pred = checkpoint['best_pred']
+
+        if self.args.print_ft:
+            print(f"=> loaded checkpoint '{self.args.resume}' (epoch {checkpoint['epoch']})")
+
+    def train_adverserial(self, output, target, i, num_img_tr, epoch, loss):
+        self.optimizer_D.zero_grad()
+
+        # switch training discriminator and network
+        self.train_d = not self.train_d if (i + num_img_tr * epoch) % self.discriminator.module.n_iter == 0 else self.train_d
+
+        loss_D = 0.0
+        loss_G = 0.0
+
+        # fake
+        fake_input = torch.softmax(output, dim=1)
+        fake_validity = self.discriminator(fake_input)
+        # real
+        real_input = target
+        real_input = onehot(real_input, self.nclass)
+        real_validity = self.discriminator(real_input)
+        # mean
+        mean_validity_real = torch.mean(real_validity, dim=0, keepdim=True).expand_as(fake_validity).detach()
+        mean_validity_fake = torch.mean(fake_validity, dim=0, keepdim=True).expand_as(real_validity).detach()
+
+        # gradient_penality = False
+        # if gradient_penality:
+        #     gp = compute_gradient_penality(self.discriminator, real_input, fake_input)
+
+        # discriminator
+        if self.train_d:
+            # discriminator loss
+            real_loss = self.adv_loss(real_validity - mean_validity_fake, torch.ones_like(real_validity))
+            fake_loss = self.adv_loss(fake_validity - mean_validity_real, torch.ones_like(fake_validity) * (- 1.0))
+            loss_D += real_loss + fake_loss  # + gp
+
+            # backprop
+            loss_D.backward()
+            self.optimizer_D.step()
+            self.writer.add_scalar('train/discriminator_loss', loss_D.item(), i + num_img_tr * epoch)
+        # train network
+        else:
+            self.writer.add_scalar('train/total_loss_iter', loss.item(), i + num_img_tr * epoch)
+
+            # discriminator loss
+            real_loss = self.adv_loss(real_validity - mean_validity_fake, torch.ones_like(real_validity) * (- 1.0))
+            fake_loss = self.adv_loss(fake_validity - mean_validity_real, torch.ones_like(fake_validity))
+            loss_G += real_loss + fake_loss
+
+            adv_loss = self.discriminator.module.generator_loss_weight * loss_G
+
+            loss += adv_loss
+
+            # backprop
+            loss.backward()
+            self.optimizer.step()
+            self.writer.add_scalar('train/generator_loss', adv_loss.item(), i + num_img_tr * epoch)
+
+    def save(self, epoch, is_best):
+        self.checkpoint = self.saver.save_checkpoint(
+            {'epoch': epoch + 1, 'state_dict': self.model.module.state_dict(), 'optimizer': self.optimizer.state_dict(),
+             'best_pred': self.best_pred,
+             'crf_state_dict': self.crf.module.state_dict() if self.crf is not None else None,
+             'discriminator_state_dict': self.discriminator.module.state_dict() if self.discriminator is not None else None,
+             'discriminator_optimizer_state_dict': self.optimizer_D.state_dict() if self.optimizer_D is not None else None},
+            is_best)
 
     def training(self, epoch):
         train_loss = 0.0
@@ -163,25 +276,31 @@ class Trainer(object):
             self.crf.train()
         tbar = tqdm(self.train_loader)
         num_img_tr = len(self.train_loader)
+
         for i, sample in enumerate(tbar):
             image, target = sample['image'], sample['label']
             if image.shape[0] == 1:  # will fail otherwise because cannot have a batch size of 1
                 continue
             if self.args.cuda:
                 image, target = image.cuda(), target.cuda()
-            if self.args.loss_type == 'cem':
-                image, target = mixup(image, onehot(target, 11), 11, alpha=0.4)
             self.scheduler(self.optimizer, i, epoch, self.best_pred)
             self.optimizer.zero_grad()
             output = self.model(image)
             if self.crf is not None and self.args.TrainCrf:
                 output = self.crf(output, image)
             loss = self.criterion(output, target)
-            loss.backward()
-            self.optimizer.step()
             train_loss += loss.item()
             tbar.set_description('Train loss: %.3f' % (train_loss / (i + 1)))
             self.writer.add_scalar('train/total_loss_iter', loss.item(), i + num_img_tr * epoch)
+
+            if self.args.adversarial_loss:
+                self.train_adverserial(output, target, i, num_img_tr, epoch, loss)
+            else:
+                loss.backward()
+                self.optimizer.step()
+                train_loss += loss.item()
+                tbar.set_description('Train loss: %.3f' % (train_loss / (i + 1)))
+                self.writer.add_scalar('train/total_loss_iter', loss.item(), i + num_img_tr * epoch)
 
             # Show 10 * 3 inference results each epoch
             if i % (num_img_tr // 2) == 0:
@@ -194,22 +313,33 @@ class Trainer(object):
 
         if self.args.no_val:
             # save checkpoint every epoch
-            is_best = False
-            self.saver.save_checkpoint({
-                'epoch': epoch + 1,
-                'state_dict': self.model.module.state_dict(),
-                'optimizer': self.optimizer.state_dict(),
-                'best_pred': self.best_pred,
-                'crf_state_dict': self.crf.module.state_dict() if self.crf is not None else None,
-            }, is_best)
+            self.save(epoch, is_best=False)
+
+    def measure_performance(self, evaluator, epoch, total_loss, image, i, name=''):
+        Acc = evaluator.Pixel_Accuracy()
+        Acc_class = evaluator.Pixel_Accuracy_Class()
+        mIoU = evaluator.Mean_Intersection_over_Union()
+        FWIoU = evaluator.Frequency_Weighted_Intersection_over_Union()
+        self.writer.add_scalar(f'val/total_loss_epoch{name}', total_loss, epoch)
+        self.writer.add_scalar(f'val/mIoU{name}', mIoU, epoch)
+        self.writer.add_scalar(f'val/Acc{name}', Acc, epoch)
+        self.writer.add_scalar(f'val/Acc_class{name}', Acc_class, epoch)
+        self.writer.add_scalar(f'val/fwIoU{name}', FWIoU, epoch)
+        print('Validation:')
+        print('[Epoch: %d, numImages: %5d]' % (epoch, i * self.args.batch_size + image.data.shape[0]))
+        print("Acc:{}, Acc_class:{}, mIoU:{}, fwIoU: {}".format(Acc, Acc_class, mIoU, FWIoU))
+        print('Loss: %.3f' % total_loss)
+
+        return mIoU
 
     def validation(self, epoch):
         self.model.eval()
-        # self.crf.eval()
         self.evaluator.reset()
+
         if self.crf is not None:
             self.crf.eval()
             self.evaluator_crf.reset()
+
         tbar = tqdm(self.val_loader, desc='\r')
         test_loss = 0.0
         for i, sample in enumerate(tbar):
@@ -219,68 +349,32 @@ class Trainer(object):
             with torch.no_grad():
                 output = self.model(image)
                 if self.crf is not None:
-                    # self.crf.module.CRF.npixels = (1080, 1080)
-                    # self.crf.module.CRF.height = 1080
-                    # self.crf.module.CRF.width = 1080
-                    # print(f"output, {output.shape}, img:{image.shape}")
                     output_crf = self.crf.forward(unary=output, img=image)
-            if self.crf is not None:
-                loss = self.criterion(output_crf, target)
-            else:
-                loss = self.criterion(output, target)
+            loss = self.criterion(output_crf if self.crf is not None else output, target)
             test_loss += loss.item()
+
             tbar.set_description('Test loss: %.3f' % (test_loss / (i + 1)))
-            pred = output.data.cpu().numpy()
+
             target = target.cpu().numpy()
-            pred = np.argmax(pred, axis=1)
+            pred = np.argmax(output.data.cpu().numpy(), axis=1)
+
             # Add batch sample into evaluator
             self.evaluator.add_batch(target, pred)
-
             if self.crf is not None:
                 pred_crf = np.argmax(output_crf.data.cpu().numpy(), axis=1)
                 self.evaluator_crf.add_batch(target, pred_crf)
 
         # Fast test during the training
-        Acc = self.evaluator.Pixel_Accuracy()
-        Acc_class = self.evaluator.Pixel_Accuracy_Class()
-        mIoU = self.evaluator.Mean_Intersection_over_Union()
-        FWIoU = self.evaluator.Frequency_Weighted_Intersection_over_Union()
-        self.writer.add_scalar('val/total_loss_epoch', test_loss, epoch)
-        self.writer.add_scalar('val/mIoU', mIoU, epoch)
-        self.writer.add_scalar('val/Acc', Acc, epoch)
-        self.writer.add_scalar('val/Acc_class', Acc_class, epoch)
-        self.writer.add_scalar('val/fwIoU', FWIoU, epoch)
-        print('Validation:')
-        print('[Epoch: %d, numImages: %5d]' % (epoch, i * self.args.batch_size + image.data.shape[0]))
-        print("Acc:{}, Acc_class:{}, mIoU:{}, fwIoU: {}".format(Acc, Acc_class, mIoU, FWIoU))
-        print('Loss: %.3f' % test_loss)
+        new_pred = self.measure_performance(self.evaluator, epoch, test_loss, image, i)
 
         if self.crf is not None:
-            # Fast test during the training
-            Acc_crf = self.evaluator_crf.Pixel_Accuracy()
-            Acc_class_crf = self.evaluator_crf.Pixel_Accuracy_Class()
-            mIoU_crf = self.evaluator_crf.Mean_Intersection_over_Union()
-            FWIoU_crf = self.evaluator_crf.Frequency_Weighted_Intersection_over_Union()
-            self.writer.add_scalar('val/mIoU_crf', mIoU_crf, epoch)
-            self.writer.add_scalar('val/Acc_crf', Acc_crf, epoch)
-            self.writer.add_scalar('val/Acc_class_crf', Acc_class_crf, epoch)
-            self.writer.add_scalar('val/fwIoU_crf', FWIoU_crf, epoch)
-            print('Validation_crf:')
-            print("Acc:{}, Acc_class:{}, mIoU:{}, fwIoU: {}".format(Acc_crf, Acc_class_crf, mIoU_crf, FWIoU_crf))
+            new_pred = self.measure_performance(self.evaluator_crf, epoch, test_loss, image, i, name="_crf")
 
-        new_pred = mIoU_crf if self.crf is not None else mIoU
         if new_pred > self.best_pred:
-            is_best = True
             self.best_pred = new_pred
-            self.saver.save_checkpoint({
-                'epoch': epoch + 1,
-                'state_dict': self.model.module.state_dict(),
-                'optimizer': self.optimizer.state_dict(),
-                'best_pred': self.best_pred,
-                'crf_state_dict': self.crf.module.state_dict() if self.crf is not None else None,
-            }, is_best)
+            self.save(epoch, is_best=True)
 
-#  pred = gausscrf.forward(unary=unary_var, img=img_var)
+
 def get_args():
     parser = argparse.ArgumentParser(description="PyTorch DeeplabV3Plus Training")
     parser.add_argument('--backbone',
@@ -295,12 +389,8 @@ def get_args():
     parser.add_argument('--dataset',
                         type=str,
                         default='isi',
-                        choices=['pascal', 'coco', 'cityscapes', 'isi_rgb', 'isi_intensity', 'isi_depth', 'isi_intensi'],
+                        choices=['pascal', 'coco', 'cityscapes', 'isi_rgb', 'isi_intensity', 'isi_depth', 'isi_rgb_temporal'],
                         help='dataset name (default: isi)')
-    parser.add_argument('--use-sbd',
-                        action='store_true',
-                        default=True,
-                        help='whether to use SBD dataset (default: True)')
     parser.add_argument('--workers',
                         type=int,
                         default=4,
@@ -376,12 +466,20 @@ def get_args():
                         action='store_true',
                         default=False,
                         help='whether use nesterov (default: False)')
+    parser.add_argument('--optimizer',
+                        type=str,
+                        default='Adam',
+                        help='optimizer type: (default: Adam')
     # cuda, seed and logging
     parser.add_argument('--no-cuda',
                         action='store_true',
                         default=False,
                         help='disables CUDA training')
     parser.add_argument('--gpu-ids',
+                        type=str,
+                        default='0',
+                        help='use which gpu to train, must be a comma-separated list of integers only (default=0)')
+    parser.add_argument('--cuda_visible_devices',
                         type=str,
                         default='0',
                         help='use which gpu to train, must be a comma-separated list of integers only (default=0)')
@@ -404,6 +502,10 @@ def get_args():
                         action='store_true',
                         default=False,
                         help='finetuning on a different dataset')
+    parser.add_argument('--print_ft',
+                        type=bool,
+                        default=True,
+                        help='print finetuning on a different dataset')
     # evaluation option
     parser.add_argument('--eval-interval',
                         type=int,
@@ -431,7 +533,58 @@ def get_args():
                         type=int,
                         default=0,
                         help='Epoch at which to start training the CRF (not stable if trained from the begining!)')
+    parser.add_argument('--skip_classes',
+                        type=str,
+                        default=None,
+                        help='Classes to skip in the computation of the iou and the loss')
+    parser.add_argument('--img_shape',
+                        type=str,
+                        default="513,513",
+                        help='Image shape')
 
+    # Adversarial loss
+    parser.add_argument('--adversarial_loss',
+                        action='store_true',
+                        default=False,
+                        help='if use adversarial loss for shape regulation or not')
+    parser.add_argument('--gradient_penalty_weight',
+                        type=float,
+                        default=1.0,
+                        help='learning rate (default: 1.0)')
+    parser.add_argument('--generator_loss_weight',
+                        type=float,
+                        default=0.0005,
+                        help='generator_loss_weight (default: 0.0005)')
+    parser.add_argument('--n_critic',
+                        type=int,
+                        default=2,
+                        help='n_critic (default: 2)')
+    parser.add_argument('--lr_ratio',
+                        type=float,
+                        default=1/7,
+                        help='lr_ratio (default: 1/7)')
+    parser.add_argument('--discriminator_blocks',
+                        type=int,
+                        default=4,
+                        help='discriminator_blocks (default: 4)')
+
+    # Temporal svc_kernel_size
+    parser.add_argument('--separate_spatial_model_path',
+                        type=str,
+                        default=None,
+                        help='Path to the spatial model when pretrained seperatly')
+    parser.add_argument('--svc_kernel_size',
+                        type=int,
+                        default=9,
+                        help='svc_kernel_size (default: 9)')
+    parser.add_argument('--train_distance',
+                        type=int,
+                        default=3000,
+                        help='svc_kernel_size (default: 9)')
+    parser.add_argument('--flow',
+                        action='store_true',
+                        default=False,
+                        help='Use feature flow for the kernel weights predictor (default: False)')
     args = parser.parse_args()
 
     args.cuda = not args.no_cuda and torch.cuda.is_available()
@@ -453,7 +606,8 @@ def get_args():
             'coco': 30,
             'cityscapes': 200,
             'pascal': 50,
-            'isi': 50,
+            'isi_rgb': 100,
+            'isi_intensity': 100,
         }
         args.epochs = epoches[args.dataset.lower()]
 
@@ -474,13 +628,44 @@ def get_args():
 
     if args.checkname is None:
         args.checkname = 'deeplab-' + str(args.backbone)
+
+    if args.skip_classes is not None:
+        print(args.dataset, args.dataset == 'isi_rgb')
+        if args.dataset == 'isi_rgb' or args.dataset == 'isi_rgb_temporal':
+            CLASSES = ['ortable',
+                       'psc',
+                       'vsc',
+                       'human',
+                       'cielinglight',
+                       'mayostand',
+                       'table',
+                       'anesthesiacart',
+                       'cannula',
+                       'instrument']
+            print(CLASSES)
+            label_name_to_value = {x: i + 1 for i, x in enumerate(CLASSES)}
+            weights = np.ones(len(CLASSES) + 1)
+            for c in args.skip_classes.split(','):
+                weights[label_name_to_value[c]] = 0
+            args.skip_weights = weights
+
+    args.img_shape = [int(i) for i in args.img_shape.split(',')]
+
     return args
+
+
+def seed(seed=1234):
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
 def main():
     args = get_args()
+    seed(args.seed)
     print(args)
-    torch.manual_seed(args.seed)
     trainer = Trainer(args)
     print('Starting Epoch:', trainer.args.start_epoch)
     print('Total Epoches:', trainer.args.epochs)
@@ -493,4 +678,5 @@ def main():
 
 
 if __name__ == "__main__":
+    os.environ["CUDA_VISIBLE_DEVICES"]="0"
     main()

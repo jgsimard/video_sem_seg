@@ -231,6 +231,62 @@ class AlignedXception(nn.Module):
 
         return x, low_level_feat
 
+    def forward_low(self, x):
+        # Entry flow
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = self.relu(x)
+
+        x = self.block1(x)
+        # add relu here
+        x = self.relu(x)
+
+        return x
+
+    def forward_high(self, x):
+        low_level_feat = x
+        x = self.block2(x)
+        x = self.block3(x)
+
+        # Middle flow
+        x = self.block4(x)
+        x = self.block5(x)
+        x = self.block6(x)
+        x = self.block7(x)
+        x = self.block8(x)
+        x = self.block9(x)
+        x = self.block10(x)
+        x = self.block11(x)
+        x = self.block12(x)
+        x = self.block13(x)
+        x = self.block14(x)
+        x = self.block15(x)
+        x = self.block16(x)
+        x = self.block17(x)
+        x = self.block18(x)
+        x = self.block19(x)
+
+        # Exit flow
+        x = self.block20(x)
+        x = self.relu(x)
+        x = self.conv3(x)
+        x = self.bn3(x)
+        x = self.relu(x)
+
+        x = self.conv4(x)
+        x = self.bn4(x)
+        x = self.relu(x)
+
+        x = self.conv5(x)
+        x = self.bn5(x)
+        x = self.relu(x)
+
+        return x, low_level_feat
+
     def _init_weight(self):
         for m in self.modules():
             if isinstance(m, nn.Conv2d):

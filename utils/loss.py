@@ -27,7 +27,8 @@ class SegmentationLosses(object):
 
     def CrossEntropyLoss(self, logit, target):
         n, c, h, w = logit.size()
-        criterion = nn.CrossEntropyLoss(weight=self.weight, ignore_index=self.ignore_index,
+        criterion = nn.CrossEntropyLoss(weight=self.weight,
+                                        ignore_index=self.ignore_index,
                                         size_average=self.size_average)
         if self.cuda:
             criterion = criterion.cuda()
@@ -72,6 +73,28 @@ class SegmentationLosses(object):
         loss = - torch.sum(input * target)
 
         return loss / input.size()[0] if size_average else loss
+def onehot(targets, num_classes):
+    """Origin: https://github.com/moskomule/mixup.pytorch
+    convert index tensor into onehot tensor
+    :param targets: index tensor
+    :param num_classes: number of classes
+    """
+    # assert isinstance(targets, torch.LongTensor)
+    return torch.zeros(targets.size()[0], num_classes).scatter_(1, targets.view(-1, 1), 1)
+
+def mixup(inputs, targets, num_classes, alpha=0.4):
+    """Mixup on 1x32x32 mel-spectrograms.
+    """
+    s = inputs.size()[0]
+    weight = torch.Tensor(np.random.beta(alpha, alpha, s))
+    index = np.random.permutation(s)
+    x1, x2 = inputs, inputs[index, :, :, :]
+    y1, y2 = onehot(targets, num_classes), onehot(targets[index,], num_classes)
+    weight = weight.view(s, 1, 1, 1)
+    inputs = weight*x1 + (1-weight)*x2
+    weight = weight.view(s, 1)
+    targets = weight*y1 + (1-weight)*y2
+    return inputs, targets
 
     def DiceLoss(self, logit, target):
         """

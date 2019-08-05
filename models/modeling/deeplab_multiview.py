@@ -100,7 +100,7 @@ if __name__ == "__main__":
     model = DeepLabMultiView(backbone='resnet', output_stride=16, num_classes=13).cuda()
     model.eval()
 
-    torchsummary.summary(model.deeplab, (3, 287, 352))
+    # torchsummary.summary(model.deeplab, (3, 287, 352))
 
     batch = 1
     image = torch.rand(batch, 4, 3, 287, 352).cuda()

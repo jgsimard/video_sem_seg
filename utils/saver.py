@@ -42,22 +42,11 @@ class Saver(object):
                 shutil.copyfile(filename, os.path.join(self.directory, 'model_best.pth.tar'))
 
     def save_experiment_config(self):
-        logfile = os.path.join(self.experiment_dir, 'parameters.txt')
-        log_file = open(logfile, 'w')
-        p = OrderedDict()
-        p['datset'] = self.args.dataset
-        p['backbone'] = self.args.backbone
-        p['out_stride'] = self.args.out_stride
-        p['lr'] = self.args.lr
-        p['lr_scheduler'] = self.args.lr_scheduler
-        p['loss_type'] = self.args.loss_type
-        p['epoch'] = self.args.epochs
-        p['base_size'] = self.args.base_size
-        p['crop_size'] = self.args.crop_size
-        p['generator_loss_weight'] = self.args.generator_loss_weight
-        p['path_pretrained_model'] = self.args.path_pretrained_model
-        p['unet_size'] = self.args.unet_size
+        with open(os.path.join(self.experiment_dir, 'parameters.txt'), 'w') as file:
+            dict = vars(self.args)
+            for k in vars(self.args):
+                file.write(f"{k}={dict[k]} \n")
 
-        for key, val in p.items():
-            log_file.write(key + ':' + str(val) + '\n')
-        log_file.close()
+        # for key, val in p.items():
+        #     log_file.write(key + ':' + str(val) + '\n')
+        # log_file.close()

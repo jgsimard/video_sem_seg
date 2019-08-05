@@ -199,7 +199,7 @@ def decode_segmap(label_mask, dataset, plot=False):
     elif dataset == 'cityscapes':
         n_classes = 19
         label_colours = get_cityscapes_labels()
-    elif dataset == 'isi_rgb':
+    elif dataset == 'isi_rgb' or dataset == 'isi_rgb_temporal':
         n_classes = 11
         label_colours = get_pascal_labels()
     elif dataset == 'isi_intensity':
