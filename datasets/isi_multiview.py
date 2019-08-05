@@ -9,6 +9,9 @@ import matplotlib.pyplot as plt
 from torchvision import transforms
 from datasets import custom_transforms as tr
 from plyfile import PlyData, PlyElement
+import albumentations as aug
+from datasets.custom_transform_multichannel import RandomNoise
+
 import torch
 import cv2
 
@@ -39,12 +42,14 @@ class DeepSightDepthMultiview(Dataset):
         self.weights = [1, 1, 1, 1, 1, 1, 0, 1, 1, 0, 0, 1, 1]
         np.random.seed(seed)
 
-        self.transform = transforms.Compose([
-            tr.RandomGaussianBlur(),
-            tr.Normalize(mean=(0.5, 0.5, 0.5),
-                         std=(0.5, 0.5, 0.5),
-                         multiview=True),
-            tr.ToTensor(multiview=True)])
+        # RandomNoise needs to be after RandomBrightnessContrast due to the requirement of uint8 in RandomBrightnessContrast
+        self.augmentation = aug.Compose([
+            aug.RandomBrightnessContrast(p=0.5),
+            RandomNoise(p=0.5),
+        ])
+
+        self.normalize = tr.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5), multiview=True)
+        self.to_tensor = tr.ToTensor(multiview=True)
 
         # find the sequences
         self.sequences = os.listdir(self.xmls_dir)
@@ -103,7 +108,15 @@ class DeepSightDepthMultiview(Dataset):
             pointcloud_tmp = np.reshape(pointcloud_tmp[0:3, :], (3,) + (WIDTH, HEIGHT))
 
             sample = {'image': img_tmp, 'label': label_tmp, 'pointcloud': pointcloud_tmp}
-            sample = self.transform(sample)
+            if self.split == 'train':
+                # image aug
+                img_np = np.asarray(img_tmp).astype(np.uint8)
+                sample_aug = self.augmentation(image=img_np)
+                sample['image'] = sample_aug['image']
+            # normalize
+            sample = self.normalize(sample)
+            # change to tensor
+            sample = self.to_tensor(sample)
 
             img[camid, :, :, :] = sample['image']
             label[camid, :, :] = sample['label']
@@ -130,13 +143,10 @@ if __name__ == "__main__":
 
     print("Testing Depth dataset")
     root_dir = "/home/deepsight3/dev/deepsight/MultiView/data"
-    depth_dataset = DeepSightDepthMultiview(root_dir, split="train")
+    depth_dataset = DeepSightDepthMultiview(root_dir, split="validation")
     train_generator = DataLoader(depth_dataset, shuffle=False, batch_size=1, num_workers=1)
 
     print(len(depth_dataset))
-
-    merger = build_merger(3)
-    merger = merger.cuda()
 
     for i_batch, sample in enumerate(train_generator):
         img = sample['image']
@@ -147,10 +157,22 @@ if __name__ == "__main__":
         print(xyzi.shape)
         print(np.unique(label))
 
-        # plt.imshow(np.asarray(img[0, 0, 0, :, :]))
-        # plt.title("img")
-        # plt.show()
-        #
+        plt.imshow(np.asarray(img[0, 0, 0, :, :]), cmap='gray')
+        plt.title("img0")
+        plt.show()
+
+        plt.imshow(np.asarray(img[0, 1, 0, :, :]), cmap='gray')
+        plt.title("img1")
+        plt.show()
+
+        plt.imshow(np.asarray(img[0, 2, 0, :, :]), cmap='gray')
+        plt.title("img2")
+        plt.show()
+
+        plt.imshow(np.asarray(img[0, 3, 0, :, :]), cmap='gray')
+        plt.title("img3")
+        plt.show()
+
         # plt.imshow(label[0, 0, :, :])
         # plt.title("mask")
         # plt.show()
@@ -159,24 +181,24 @@ if __name__ == "__main__":
         #     plt.imshow(xyzi[0, 0, j, :, :])
         #     plt.show()
 
-        # test projection
-        camid_src = 0
-        camid_target = 0
-
-        img = img.cuda()
-        label = label.cuda()
-        xyzi = xyzi.cuda()
-
-        # transform
-        xyz_tmp = transform_point_cloud(xyzi[:, camid_src, 0:3, :, :], T[camid_src], T[camid_target])
-        # project feature
-        img_projected = project_point_cloud(xyz_tmp, img[:, camid_src, :, :, :], CAM_MTX[camid_target])
-
-        plt.imshow(img_projected[0, 0, :, :].cpu().numpy().reshape(HEIGHT, WIDTH), cmap='gray')
-        plt.show()
-        plt.imshow(img[0, camid_src, 0, :, :].cpu().numpy(), cmap='gray')
-        plt.show()
-        plt.imshow(img[0, camid_target, 0, :, :].cpu().numpy(), cmap='gray')
-        plt.show()
+        # # test projection
+        # camid_src = 0
+        # camid_target = 0
+        #
+        # img = img.cuda()
+        # label = label.cuda()
+        # xyzi = xyzi.cuda()
+        #
+        # # transform
+        # xyz_tmp = transform_point_cloud(xyzi[:, camid_src, 0:3, :, :], T[camid_src], T[camid_target])
+        # # project feature
+        # img_projected = project_point_cloud(xyz_tmp, img[:, camid_src, :, :, :], CAM_MTX[camid_target])
+        #
+        # plt.imshow(img_projected[0, 0, :, :].cpu().numpy().reshape(HEIGHT, WIDTH), cmap='gray')
+        # plt.show()
+        # plt.imshow(img[0, camid_src, 0, :, :].cpu().numpy(), cmap='gray')
+        # plt.show()
+        # plt.imshow(img[0, camid_target, 0, :, :].cpu().numpy(), cmap='gray')
+        # plt.show()
 
         break

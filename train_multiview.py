@@ -47,7 +47,8 @@ class Trainer(object):
                                  backbone=args.backbone,
                                  output_stride=args.out_stride,
                                  sync_bn=args.sync_bn,
-                                 freeze_bn=args.freeze_bn)
+                                 freeze_bn=args.freeze_bn,
+                                 unet_size=args.unet_size)
         model.merger = init_net(model.merger, type="kaiming", activation_mode='relu', distribution='normal')
 
         if args.adversarial_loss:
@@ -340,6 +341,11 @@ class Trainer(object):
         #     print("{} class, IoU is {:1.2f}\n".format(i_class, class_IoU))
         print('Loss: %.3f' % test_loss)
 
+        self.summary.visualize_validation_mulitview(self.writer, self.args.dataset, image[0, :, :, :, :],
+                                                    target[0, :, :, :], output_single_view[0, :, :, :, :],
+                                                    output_merger[0, :, :, :, :],
+                                                    epoch)
+
         new_pred = mIoU
         if new_pred > self.best_pred:
             is_best = True
@@ -520,6 +526,9 @@ def get_args():
     parser.add_argument('--generator_loss_weight',
                         type=float,
                         default=0.0005)
+    parser.add_argument('--unet_size',
+                        type=str,
+                        default='Medium')
 
     args = parser.parse_args()
 
@@ -567,7 +576,7 @@ def get_args():
 
 
 def main():
-    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "1"
     args = get_args()
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)

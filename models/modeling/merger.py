@@ -12,7 +12,7 @@ from torchvision import transforms
 from datasets.custom_transform_multichannel import ToNumpy, ToTensor, RandomDropOut, RandomNoise
 from datasets.multiview_info import *
 
-from models.modeling.unet_model import UNet
+from models.modeling.unet_model import UNet, UNetMedium, UNetSmall
 import albumentations as aug
 
 
@@ -139,17 +139,23 @@ def transform_point_cloud(xyz_src, T_src, T_target):
 class Merger(nn.Module):
     """ Augmentation has to be put here due to projection"""
 
-    def __init__(self, num_classes):
+    def __init__(self, num_classes, unet_size):
         super(Merger, self).__init__()
         self.num_classes = num_classes
 
-        self.unet = UNet(n_channels=(self.num_classes + 1) * CAM_NUM, n_classes=self.num_classes)
+        if unet_size == 'Large':
+            self.unet = UNet(n_channels=(self.num_classes + 1) * CAM_NUM, n_classes=self.num_classes)
+        elif unet_size == 'Medium':
+            self.unet = UNetMedium(n_channels=(self.num_classes + 1) * CAM_NUM, n_classes=self.num_classes)
+        elif unet_size == 'Small':
+            self.unet = UNetSmall(n_channels=(self.num_classes + 1) * CAM_NUM, n_classes=self.num_classes)
+
         self._init_weight()
 
         self.transform_train = aug.Compose([
+            aug.GaussianBlur(p=0.5),
             aug.HorizontalFlip(p=0.5),
-            aug.ShiftScaleRotate(p=0.7, rotate_limit=30, border_mode=0),
-            aug.OneOf([aug.Blur(p=0.7, blur_limit=3), RandomNoise(p=0.7)]),
+            aug.ShiftScaleRotate(p=0.7, rotate_limit=30, border_mode=0)
         ])
 
         self.scale = 10.0
@@ -200,9 +206,9 @@ class Merger(nn.Module):
             order = torch.cat((torch.tensor([camid_target]).cuda(), order))
             feature_all_projected = torch.index_select(feature_all_projected, 1, order)
 
-            # # some visualization
-            # visualize(label[0, camid_target, :, :], feature_all_projected[0, :, :, :, :], self.num_classes,
-            #           concat=False)
+            # some visualization
+            visualize(label[0, camid_target, :, :], feature_all_projected[0, :, :, :, :], self.num_classes,
+                      concat=False)
 
             # augmentation and dropout
             if self.training:
@@ -244,15 +250,15 @@ class Merger(nn.Module):
                 m.bias.data.zero_()
 
 
-def build_merger(num_classes):
-    return Merger(num_classes)
+def build_merger(num_classes, unet_size):
+    return Merger(num_classes, unet_size)
 
 
 if __name__ == "__main__":
     from models.modeling.sync_batchnorm.batchnorm import SynchronizedBatchNorm2d
     from datasets.isi_multiview import DeepSightDepthMultiview
 
-    merger = build_merger(13)
+    merger = build_merger(13, 'Small')
     merger = merger.cuda()
 
     print("Testing Depth dataset")
