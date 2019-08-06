@@ -118,16 +118,69 @@ class UNet(nn.Module):
         return x
 
 
+class UNetMedium(nn.Module):
+    def __init__(self, n_channels, n_classes):
+        super(UNetMedium, self).__init__()
+        self.inc = inconv(n_channels, 64)
+        self.down1 = down(64, 128)
+        self.down2 = down(128, 256)
+        self.down3 = down(256, 256)
+        self.up1 = up(512, 128)
+        self.up2 = up(256, 64)
+        self.up3 = up(128, 64)
+        self.outc = outconv(64, n_classes)
+
+    def forward(self, x):
+        x1 = self.inc(x)
+        x2 = self.down1(x1)
+        x3 = self.down2(x2)
+        x4 = self.down3(x3)
+        x = self.up1(x4, x3)
+        x = self.up2(x, x2)
+        x = self.up3(x, x1)
+        x = self.outc(x)
+
+        return x
+
+
+class UNetSmall(nn.Module):
+    def __init__(self, n_channels, n_classes):
+        super(UNetSmall, self).__init__()
+        self.inc = inconv(n_channels, 64)
+        self.down1 = down(64, 128)
+        self.down2 = down(128, 128)
+        self.up1 = up(256, 64)
+        self.up2 = up(128, 64)
+        self.outc = outconv(64, n_classes)
+
+    def forward(self, x):
+        x1 = self.inc(x)
+        x2 = self.down1(x1)
+        x3 = self.down2(x2)
+        x = self.up1(x3, x2)
+        x = self.up2(x, x1)
+        x = self.outc(x)
+
+        return x
+
+
 if __name__ == '__main__':
     import torch
     import torchsummary
 
+    feat = torch.rand([4, (13 + 1) * 4, 287, 352]).cuda()
+
     model = UNet(n_channels=(13 + 1) * 4, n_classes=13).cuda()
-
     torchsummary.summary(model, ((13 + 1) * 4, 287, 352))
-
-    feat = torch.rand([4, (13 + 1) * 4, 287, 352])
-
     out = model(feat)
+    print(out.shape)
 
+    model_medium = UNetMedium(n_channels=(13 + 1) * 4, n_classes=13).cuda()
+    torchsummary.summary(model_medium, ((13 + 1) * 4, 287, 352))
+    out = model_medium(feat)
+    print(out.shape)
+
+    model_small = UNetSmall(n_channels=(13 + 1) * 4, n_classes=13).cuda()
+    torchsummary.summary(model_small, ((13 + 1) * 4, 287, 352))
+    out = model_small(feat)
     print(out.shape)

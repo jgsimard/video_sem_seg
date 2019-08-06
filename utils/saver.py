@@ -46,18 +46,6 @@ class Saver(object):
             dict = vars(self.args)
             for k in vars(self.args):
                 file.write(f"{k}={dict[k]} \n")
-        # logfile = os.path.join(self.experiment_dir, 'parameters.txt')
-        # log_file = open(logfile, 'w')
-        # p = OrderedDict()
-        # p['datset'] = self.args.dataset
-        # p['backbone'] = self.args.backbone
-        # p['out_stride'] = self.args.out_stride
-        # p['lr'] = self.args.lr
-        # p['lr_scheduler'] = self.args.lr_scheduler
-        # p['loss_type'] = self.args.loss_type
-        # p['epoch'] = self.args.epochs
-        # p['base_size'] = self.args.base_size
-        # p['crop_size'] = self.args.crop_size
 
         # for key, val in p.items():
         #     log_file.write(key + ':' + str(val) + '\n')

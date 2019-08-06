@@ -18,7 +18,6 @@ from utils.saver import Saver
 from utils.summaries import TensorboardSummary
 from utils.metrics import Evaluator
 
-import models.convcrf as convcrf
 from models.network_initialization import init_net
 
 from models.modeling.discriminator import Discriminator, onehot
@@ -26,21 +25,6 @@ from models.modeling.discriminator import Discriminator, onehot
 CAM_NUM = 4
 HEIGHT = 287
 WIDTH = 352
-
-
-def mixup(inputs, targets, num_classes, alpha=0.4):
-    """Mixup on 1x32x32 mel-spectrograms.
-    """
-    s = inputs.size()[0]
-    weight = torch.Tensor(np.random.beta(alpha, alpha, s))
-    index = np.random.permutation(s)
-    x1, x2 = inputs, inputs[index, :, :, :]
-    y1, y2 = onehot(targets, num_classes), onehot(targets[index,], num_classes)
-    weight = weight.view(s, 1, 1, 1)
-    inputs = weight * x1 + (1 - weight) * x2
-    weight = weight.view(s, 1)
-    targets = weight * y1 + (1 - weight) * y2
-    return inputs, targets
 
 
 class Trainer(object):
@@ -63,7 +47,8 @@ class Trainer(object):
                                  backbone=args.backbone,
                                  output_stride=args.out_stride,
                                  sync_bn=args.sync_bn,
-                                 freeze_bn=args.freeze_bn)
+                                 freeze_bn=args.freeze_bn,
+                                 unet_size=args.unet_size)
         model.merger = init_net(model.merger, type="kaiming", activation_mode='relu', distribution='normal')
 
         if args.adversarial_loss:
@@ -73,20 +58,10 @@ class Trainer(object):
                                           img_width=352,
                                           filter_base=16,
                                           n_iter=2,
-                                          generator_loss_weight=0.0005,
+                                          generator_loss_weight=self.args.generator_loss_weight,
                                           lr_ratio=1,
                                           gp_weigth=1)
             discriminator = init_net(discriminator, type='kaiming', activation_mode='relu', distribution='normal')
-
-        # crf
-        self.crf = None
-        if args.GaussCrf:
-            if self.args.TrainCrf:
-                conf = convcrf.isi_trainable_conf
-            else:
-                conf = convcrf.isi_untrainable_conf
-
-            self.crf = convcrf.GaussCRF(conf=conf, shape=(513, 513), nclasses=self.nclass)
 
         # load pretrain model
         if args.path_pretrained_model is not None:
@@ -152,7 +127,6 @@ class Trainer(object):
 
         # Define Evaluator
         self.evaluator = Evaluator(self.nclass)
-        self.evaluator_crf = Evaluator(self.nclass)
         # Define lr scheduler
         self.scheduler = LR_Scheduler(args.lr_scheduler,
                                       args.lr,
@@ -164,11 +138,6 @@ class Trainer(object):
             self.model = torch.nn.DataParallel(self.model, device_ids=self.args.gpu_ids)
             patch_replication_callback(self.model)
             self.model = self.model.cuda()
-
-            if args.GaussCrf:
-                self.crf = torch.nn.DataParallel(self.crf, device_ids=self.args.gpu_ids)
-                patch_replication_callback(self.crf)
-                self.crf = self.crf.cuda()
 
             if args.adversarial_loss:
                 self.discriminator = torch.nn.DataParallel(self.discriminator, device_ids=self.args.gpu_ids)
@@ -185,19 +154,13 @@ class Trainer(object):
             args.start_epoch = checkpoint['epoch']
             if args.cuda:
                 self.model.module.load_state_dict(checkpoint['state_dict'])
-                if args.GaussCrf and 'crf_state_dict' in checkpoint:
-                    if checkpoint['crf_state_dict'] is not None:
-                        print("loading crf")
-                        self.crf.module.load_state_dict(checkpoint['crf_state_dict'])
+
                 if self.args.adversarial_loss:
                     self.discriminator.module.load_state_dict(checkpoint['discriminator_state_dict'])
 
             else:
                 self.model.load_state_dict(checkpoint['state_dict'])
-                if args.GaussCrf and 'crf_state_dict' in checkpoint:
-                    if checkpoint['crf_state_dict'] is not None:
-                        print("loading crf")
-                        self.crf.load_state_dict(checkpoint['crf_state_dict'])
+
                 if self.args.adversarial_loss:
                     self.discriminator.load_state_dict(checkpoint['discriminator_state_dict'])
 
@@ -215,8 +178,7 @@ class Trainer(object):
         train_d_loss = 0.0
         train_g_loss = 0.0
         self.model.train()
-        if self.args.TrainCrf:
-            self.crf.train()
+
         tbar = tqdm(self.train_loader)
         num_img_tr = len(self.train_loader)
 
@@ -248,8 +210,8 @@ class Trainer(object):
             # adversarial loss
             if self.args.adversarial_loss:
                 # switch training discriminator and network
-                train_d = not train_d if (i + num_img_tr * epoch) % self.discriminator.n_iter == 0 else train_d
-                
+                train_d = not train_d if (i + num_img_tr * epoch) % self.discriminator.module.n_iter == 0 else train_d
+
                 loss_D = 0.0
                 loss_G = 0.0
 
@@ -329,17 +291,13 @@ class Trainer(object):
                 'state_dict': self.model.module.state_dict(),
                 'optimizer': self.optimizer.state_dict(),
                 'best_pred': self.best_pred,
-                'crf_state_dict': self.crf.module.state_dict() if self.crf is not None else None,
                 'discriminator_state_dict': self.discriminator.module.state_dict() if self.args.adversarial_loss else None,
             }, is_best)
 
     def validation(self, epoch):
         self.model.eval()
-        # self.crf.eval()
         self.evaluator.reset()
-        if self.crf is not None:
-            self.crf.eval()
-            self.evaluator_crf.reset()
+
         tbar = tqdm(self.val_loader, desc='\r')
         test_loss = 0.0
         for i, sample in enumerate(tbar):
@@ -349,12 +307,6 @@ class Trainer(object):
 
             with torch.no_grad():
                 output_single_view, output_merger, target = self.model(image, pc, target)
-                if self.crf is not None:
-                    # self.crf.module.CRF.npixels = (1080, 1080)
-                    # self.crf.module.CRF.height = 1080
-                    # self.crf.module.CRF.width = 1080
-                    # print(f"output, {output.shape}, img:{image.shape}")
-                    output_merger = self.crf.forward(unary=output_merger, img=image)
 
                 # calculate loss
                 loss = 0.0
@@ -370,10 +322,6 @@ class Trainer(object):
                 pred_tmp = np.argmax(pred_tmp, axis=1)
                 # Add batch sample into evaluator
                 self.evaluator.add_batch(target_tmp, pred_tmp)
-
-            if self.crf is not None:
-                pred_crf = np.argmax(output_merger.data.cpu().numpy(), axis=1)
-                self.evaluator_crf.add_batch(target, pred_crf)
 
         # Fast test during the training
         Acc = self.evaluator.Pixel_Accuracy()
@@ -393,18 +341,10 @@ class Trainer(object):
         #     print("{} class, IoU is {:1.2f}\n".format(i_class, class_IoU))
         print('Loss: %.3f' % test_loss)
 
-        if self.crf is not None:
-            # Fast test during the training
-            Acc_crf = self.evaluator_crf.Pixel_Accuracy()
-            Acc_class_crf = self.evaluator_crf.Pixel_Accuracy_Class()
-            mIoU_crf = self.evaluator_crf.Mean_Intersection_over_Union()
-            FWIoU_crf = self.evaluator_crf.Frequency_Weighted_Intersection_over_Union()
-            self.writer.add_scalar('val/mIoU_crf', mIoU_crf, epoch)
-            self.writer.add_scalar('val/Acc_crf', Acc_crf, epoch)
-            self.writer.add_scalar('val/Acc_class_crf', Acc_class_crf, epoch)
-            self.writer.add_scalar('val/fwIoU_crf', FWIoU_crf, epoch)
-            print('Validation_crf:')
-            print("Acc:{}, Acc_class:{}, mIoU:{}, fwIoU: {}".format(Acc_crf, Acc_class_crf, mIoU_crf, FWIoU_crf))
+        self.summary.visualize_validation_mulitview(self.writer, self.args.dataset, image[0, :, :, :, :],
+                                                    target[0, :, :, :], output_single_view[0, :, :, :, :],
+                                                    output_merger[0, :, :, :, :],
+                                                    epoch)
 
         new_pred = mIoU
         if new_pred > self.best_pred:
@@ -415,12 +355,10 @@ class Trainer(object):
                 'state_dict': self.model.module.state_dict(),
                 'optimizer': self.optimizer.state_dict(),
                 'best_pred': self.best_pred,
-                'crf_state_dict': self.crf.module.state_dict() if self.crf is not None else None,
                 'discriminator_state_dict': self.discriminator.module.state_dict() if self.args.adversarial_loss else None,
             }, is_best)
 
 
-#  pred = gausscrf.forward(unary=unary_var, img=img_var)
 def get_args():
     parser = argparse.ArgumentParser(description="PyTorch DeeplabV3Plus Training")
     parser.add_argument('--backbone',
@@ -585,9 +523,12 @@ def get_args():
     parser.add_argument('--loss_type',
                         type=str,
                         default='dice')
-    parser.add_argument('--lr_scheduler',
+    parser.add_argument('--generator_loss_weight',
+                        type=float,
+                        default=0.0005)
+    parser.add_argument('--unet_size',
                         type=str,
-                        default='step')
+                        default='Medium')
 
     args = parser.parse_args()
 
@@ -635,6 +576,7 @@ def get_args():
 
 
 def main():
+    os.environ["CUDA_VISIBLE_DEVICES"] = "1"
     args = get_args()
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)

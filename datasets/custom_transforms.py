@@ -19,7 +19,6 @@ class Normalize(object):
         self.multiview = multiview
 
     def __call__(self, sample):
-        # input is numpy array in CAM_NUM x C x H x W
         img = sample['image']
         mask = sample['label']
 

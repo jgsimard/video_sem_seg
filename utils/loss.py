@@ -1,7 +1,9 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.autograd import Variable
 import numpy as np
+
 
 
 class SegmentationLosses(object):
@@ -20,6 +22,8 @@ class SegmentationLosses(object):
             return self.FocalLoss
         elif mode == 'cem':
             return self.CrossEntropyMixupLoss
+        elif mode == 'dice':
+            return self.DiceLoss
         else:
             raise NotImplementedError
 
@@ -94,6 +98,34 @@ def mixup(inputs, targets, num_classes, alpha=0.4):
     targets = weight*y1 + (1-weight)*y2
     return inputs, targets
 
+    def DiceLoss(self, logit, target):
+        """
+        Dice loss = 2 * tp / (2 * tp + fp + fn)
+
+        :param logit:
+            B x C x W x H
+        :param target:
+            B x W x H
+        :return:
+        """
+        scores = F.softmax(logit, dim=1)
+
+        batch, number_of_classes, height, width = scores.shape
+        target_one_hot = torch.zeros_like(logit)
+        target_one_hot.scatter_(1, target.view(batch, 1, height, width).long(), 1)
+
+        smooth = 1e-7
+        loss = 0
+
+        for cl in range(number_of_classes):
+            iflat = scores[:, cl, :, :].contiguous().view(-1)
+            tflat = target_one_hot[:, cl, :, :].contiguous().view(-1)
+            intersection = (iflat * tflat).sum()
+            loss += (1 - ((2. * intersection + smooth) / (iflat.sum() + tflat.sum() + smooth))) * self.weight[cl]
+
+        return loss
+
+
 if __name__ == "__main__":
     loss = SegmentationLosses(cuda=True)
     a = torch.rand(1, 3, 7, 7).cuda()
@@ -101,7 +133,3 @@ if __name__ == "__main__":
     print(loss.CrossEntropyLoss(a, b).item())
     print(loss.FocalLoss(a, b, gamma=0, alpha=None).item())
     print(loss.FocalLoss(a, b, gamma=2, alpha=0.5).item())
-
-
-
-

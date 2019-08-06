@@ -8,9 +8,10 @@ from models.modeling.aspp import build_aspp
 from models.modeling.decoder import build_decoder
 from models.modeling.backbone import build_backbone
 
+
 class DeepLab(nn.Module):
     def __init__(self, backbone='resnet', output_stride=16, num_classes=21,
-                 sync_bn=True, freeze_bn=False, input_channels = 3):
+                 sync_bn=True, freeze_bn=False, input_channels=3, pretrained=True):
         super(DeepLab, self).__init__()
         if backbone == 'drn':
             output_stride = 8
@@ -20,7 +21,7 @@ class DeepLab(nn.Module):
         else:
             BatchNorm = nn.BatchNorm2d
 
-        self.backbone = build_backbone(backbone, output_stride, BatchNorm, input_channels)
+        self.backbone = build_backbone(backbone, output_stride, BatchNorm, input_channels, pretrained=pretrained)
         self.aspp = build_aspp(backbone, output_stride, BatchNorm)
         self.decoder = build_decoder(num_classes, backbone, BatchNorm)
 

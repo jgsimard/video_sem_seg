@@ -76,6 +76,58 @@ class ToPILImage(object):
                 'label': mask_PIL}
 
 
+class RandomNoise(ImageOnlyTransform):
+    def __init__(self, always_apply=False, p=1.0, gauss_mean=0.0, gauss_var=0.01, sp_ratio=0.5, sp_amount=0.005):
+        super(RandomNoise, self).__init__(always_apply, p)
+        self.gauss_mean = gauss_mean
+        self.gauss_var = gauss_var
+        self.sp_ratio = sp_ratio
+        self.sp_amount = sp_amount
+
+    def apply(self, image, **params):
+        prob = random.random()
+        if 0.0 <= prob < 0.5:
+            # print("gauss")
+            image = self.noise("gauss", image)
+        else:
+            # print("s&p")
+            image = self.noise("s&p", image)
+        # else:
+        #     # print("poisson")
+        #     image = self.noise("poisson", image)
+
+        return image
+
+    def noise(self, noise_type, image):
+        row, col, ch = image.shape
+        if noise_type == "gauss":
+            mean = self.gauss_mean
+            sigma = self.gauss_var ** 0.5
+            gauss = np.random.normal(mean, sigma, (row, col, ch))
+            noisy = image + gauss
+        elif noise_type == "s&p":
+            s_vs_p = self.sp_ratio
+            amount = self.sp_amount
+            noisy = np.copy(image)
+            # Salt mode
+            num_salt = np.ceil(amount * image.size * s_vs_p)
+            coords = tuple([np.random.randint(0, i - 1, int(num_salt))
+                            for i in image.shape])
+            noisy[coords] = 1
+
+            # Pepper mode
+            num_pepper = np.ceil(amount * image.size * (1. - s_vs_p))
+            coords = tuple([np.random.randint(0, i - 1, int(num_pepper))
+                            for i in image.shape])
+            noisy[coords] = 0
+        # elif noise_type == "poisson":
+        #     vals = len(np.unique(image))
+        #     vals = 2 ** np.ceil(np.log2(vals))
+        #     noisy = image + np.random.poisson(image * vals) / float(vals)
+
+        return noisy
+
+
 if __name__ == "__main__":
     from torchvision import transforms
     import matplotlib.pyplot as plt
@@ -100,10 +152,10 @@ if __name__ == "__main__":
     plt.show()
 
     # augment
-    trans = aug.Compose([aug.HorizontalFlip(p=1),
-                         aug.ShiftScaleRotate(p=1, rotate_limit=20, border_mode=0),
-                         aug.Blur(p=1, blur_limit=3),
-                         aug.Cutout(p=1, num_holes=128, max_h_size=3, max_w_size=3)
+    trans = aug.Compose([aug.HorizontalFlip(p=0.0),
+                         aug.ShiftScaleRotate(p=0.0, rotate_limit=20, border_mode=0),
+                         aug.Blur(p=0.0, blur_limit=3),
+                         RandomNoise(p=1),
                          ])
     sample = trans(image=img, mask=mask)
     img = sample['image']
