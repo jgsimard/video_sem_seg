@@ -8,36 +8,71 @@ from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from tqdm import tqdm
+import sys
+import signal
 
 import models.convcrf as convcrf
 from datasets import custom_transforms as tr
 from models.modeling.deeplab import DeepLab
 from models.modeling.sync_batchnorm.replicate import patch_replication_callback
 from utils.visualization import fig2img, vis_segmentation
-from utils.utils import get_files, create_directory
+from utils.utils import get_files, create_directory, timeit
 from train import get_args
+import time
+from models.afp import LowLatencyModel
 
 
-def load_model(args, nclass=11):
-    # loading saved model
-    if not os.path.isfile(args.resume):
-        raise RuntimeError(f"=> no checkpoint found at '{args.resume}'")
-    checkpoint = torch.load(args.resume)
+def load_model(args, nclass=11, temporal=False):
+    if not temporal:
+        if not os.path.isfile(args.resume):
+            raise RuntimeError(f"=> no checkpoint found at '{args.resume}'")
+        checkpoint = torch.load(args.resume)
 
-    # deeplab
-    model = DeepLab(num_classes=nclass,
-                    backbone=args.backbone,
-                    output_stride=args.out_stride,
-                    sync_bn=args.sync_bn,
-                    freeze_bn=args.freeze_bn)
+        # deeplab
+        model = DeepLab(num_classes=nclass,
+                        backbone=args.backbone,
+                        output_stride=args.out_stride,
+                        sync_bn=args.sync_bn,
+                        freeze_bn=args.freeze_bn)
 
-    model = torch.nn.DataParallel(model, device_ids=args.gpu_ids)
-    patch_replication_callback(model)
-    model = model.cuda()
+        model = torch.nn.DataParallel(model, device_ids=args.gpu_ids)
+        patch_replication_callback(model)
+        model = model.cuda()
 
-    model.module.load_state_dict(checkpoint['state_dict'])
-    model.eval()
-    return model
+        model.module.load_state_dict(checkpoint['state_dict'])
+        model.eval()
+        return model
+    else:
+        spatial_model = DeepLab(num_classes=nclass,
+                                backbone=args.backbone,
+                                output_stride=args.out_stride,
+                                sync_bn=args.sync_bn,
+                                freeze_bn=True)
+        # Fix deeplab as the features extractor
+        for param in spatial_model.parameters():
+            param.requires_grad = False
+
+        temporal_model = LowLatencyModel(spatial_model, kernel_size=args.svc_kernel_size, flow=args.flow, fixed_schedule=args.demo_frame_fixed_schedule)
+
+        # CUDA
+        spatial_model = torch.nn.DataParallel(spatial_model, device_ids=args.gpu_ids)
+        patch_replication_callback(spatial_model)
+        spatial_model = spatial_model.cuda()
+
+        temporal_model = torch.nn.DataParallel(temporal_model, device_ids=args.gpu_ids)
+        patch_replication_callback(temporal_model)
+        temporal_model = temporal_model.cuda()
+
+        # LOAD
+        checkpoint = torch.load(args.resume)
+        spatial_model.module.load_state_dict(checkpoint['spatial_model_state_dict'])
+        temporal_model.module.load_state_dict(checkpoint['temporal_model_state_dict'])
+
+        #EVAL
+        temporal_model.eval()
+
+        return temporal_model
+
 
 rgb_transform = transforms.Compose([tr.FixScaleCrop(crop_size=513),
                                     tr.Normalize(mean=(0.5, 0.5, 0.5),
@@ -82,6 +117,7 @@ class DeepSightDemoDepth(Dataset):
     def __getitem__(self, item):
         path = os.path.join(self.root_dir, self.images[item])
         img = Image.open(path)
+        img = img.transpose(Image.FLIP_TOP_BOTTOM)
         label = Image.open(path)
         sample = {'image': img, 'label': label}
         sample = self.transform(sample)
@@ -89,16 +125,11 @@ class DeepSightDemoDepth(Dataset):
         return sample
 
 
-# def get_video_writer(directory, name="inference_video", fps=30, shape=(1500,500)):
-#     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-#     out = cv2.VideoWriter(os.path.join(directory, f'{name}.mp4'), fourcc, fps, shape)
-#     return out
-
 
 class VideoWriter(object):
-    def __init__(self, directory, name="inference_video", fps=30, shape=(1500,500)):
+    def __init__(self, directory, name="inference_video", fps=15, shape=(1500,500)):
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        self.video_writer =  cv2.VideoWriter(os.path.join(directory, f'{name}.mp4'), fourcc, fps, shape)
+        self.video_writer =  cv2.VideoWriter(os.path.join(directory, f'{name}_{int(time.time())}.mp4'), fourcc, fps, shape)
 
     def __enter__(self):
         return self.video_writer
@@ -110,10 +141,12 @@ def inference(image, model):
     imgs = []
     imgs_np = []
     masks = []
+    ts = time.time()
     output = model(image)
-    print(output.shape)
     output = torch.argmax(output, dim=1)
-    print(output.shape)
+    te = time.time()
+    print(f'inference : {(te - ts) * 1000:2.2f} ms')
+
     for i in range(output.shape[0]):
         mask = output[i, :, :].cpu().numpy().astype(np.uint8)
         mask = Image.fromarray(mask)
@@ -129,77 +162,87 @@ def inference(image, model):
 
     return imgs, imgs_np, masks
 
+def signal_handler(sig, frame, video_writer):
+    print('You pressed Ctrl+C!')
+    video_writer.release()
+    sys.exit(0)
 
 if __name__ == "__main__":
     args = get_args()
-    model = load_model(args)
+    model = load_model(args, nclass=11, temporal=args.demo_temporal)
+
+    if args.demo_img_folder is not None:
+        # rgb_demo_dataset = DeepSightDemoRGB(args.demo_img_folder)
+        rgb_demo_dataset = DeepSightDemoDepth(args.demo_img_folder)
+        data_loader = DataLoader(rgb_demo_dataset, batch_size=32, shuffle=True)
+        pred_dir = os.path.join(args.demo_img_folder, "pred")
+        transform_dir = os.path.join(args.demo_img_folder, "transform")
+        create_directory(pred_dir)
+        create_directory(transform_dir)
+        for i, sample in enumerate(tqdm(data_loader)):
+            image, target, names = sample['image'], sample['label'], sample['id']
+            imgs, imgs_np, masks = inference(image, model)
+            for i in range(len(imgs)):
+                masks[i].save(os.path.join(pred_dir, names[i]))
+                imgs[i].save(os.path.join(transform_dir, names[i]))
+
+        # create the video
+        # images = sorted(get_files(transform_dir))
+        images = sorted(get_files(transform_dir), key=lambda x: int(x.split(".")[0]))
+        # images = sorted(get_files(transform_dir), key=lambda x: int(x.split(".")[0][14:]))
+        print(images)
+        fig = None
+        with VideoWriter(pred_dir, name="test_imgs", fps=5) as video_writer:
+            for img_name in images:
+                img = np.array(Image.open(os.path.join(transform_dir, img_name)))
+                pred = np.array(Image.open(os.path.join(pred_dir, img_name)))
+
+                fig = vis_segmentation(img, pred, fig)
+                data = fig2img(fig)
+                video_writer.write(data)
+
+
+    stream = None
     if args.demo_video_path is not None:
         stream = cv2.VideoCapture(args.demo_video_path)
     elif args.demo_camera:
-        stream = cv2.VideoCapture(1)
-    fig = None
-    output_video_directory = args.demo_video_output if args.demo_video_output is not None else os.getcwd()
-    with VideoWriter(output_video_directory, name="test_camera") as video_writer:
-        while(stream.isOpened()):
-            read_succesful, frame = stream.read()
-            if not read_succesful:
-                print(read_succesful)
-                continue
-
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            # frame = cv2.flip(frame, 0)
-            img = Image.fromarray(frame)
-            sample = {'image':img, 'label':img}
-            sample = rgb_transform(sample)
-
-            image = sample['image'].unsqueeze(dim=0)
-
-            print(image.shape)
-            imgs, imgs_np,  masks = inference(image, model)
-            print(imgs, masks)
-
-            fig = vis_segmentation(imgs_np[0], masks[0], fig)
-            data = fig2img(fig)
-            video_writer.write(data)
+        stream = cv2.VideoCapture(0)
 
 
+    if stream is not None:
+        fig = None
+        output_video_directory = args.demo_video_output if args.demo_video_output is not None else os.getcwd()
+        output_video_directory = args.demo_video_output if args.demo_video_output is not None else os.getcwd()
 
-    # for id in ['33', '46', '80', '18']:
-    #     path = f"/home/deepsight/data/rgb/validation_video/{id}"
-    #     depth_demo_dataset = DeepSightDemoRGB(path)
-    #
-    #     print(len(depth_demo_dataset))
-    #     data_loader = DataLoader(depth_demo_dataset, batch_size=16, shuffle=True)
-    #     pred_dir = os.path.join(path, "pred")
-    #     transform_dir = os.path.join(path, "transform")
-    #     create_directory(pred_dir)
-    #     create_directory(transform_dir)
-    #
-    #     for i, sample in enumerate(tqdm(data_loader)):
-    #         image, target, names = sample['image'], sample['label'], sample['id']
-    #         output = model(image)
-    #         output = torch.argmax(output, dim=1)
-    #         for i in range(output.shape[0]):
-    #             img = Image.fromarray(output[i, :, :].cpu().numpy().astype(np.uint8))
-    #             img.save(os.path.join(pred_dir, names[i]))
-    #
-    #             img = Image.fromarray(
-    #                 np.transpose(((image[i, :, :, :] * 0.5 + 0.5) * 255).cpu().numpy().astype(np.uint8), (1, 2, 0)))
-    #             img.save(os.path.join(transform_dir, names[i]))
-    #
-    #
-    #     images = sorted(get_files(transform_dir), key=lambda x: int(x.split(".")[0]))
-    #     print(images)
-    #
-    #     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    #     out = cv2.VideoWriter(f'{pred_dir}_video.mp4', fourcc, 10.0, (1500, 500))
-    #
-    #     fig = None
-    #     for img_name in images:
-    #         img = np.array(Image.open(os.path.join(transform_dir, img_name)))
-    #         pred = np.array(Image.open(os.path.join(pred_dir, img_name)))
-    #
-    #         fig = vis_segmentation(img, pred, fig)
-    #         data = fig2img(fig)
-    #         out.write(data)
-    #     out.release()
+        with VideoWriter(output_video_directory, name="test_video_spatial") as video_writer:
+            signal.signal(signal.SIGINT, lambda x,y: signal_handler(x,y,video_writer))
+            try:
+                while(stream.isOpened()):
+                    read_succesful, frame = stream.read()
+                    if not read_succesful:
+                        print(read_succesful)
+                        continue
+
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    #for ZED
+                    # frame_w = frame.shape[1]
+                    # frame = frame[:,:int(frame_w/2), :]
+                    # frame = cv2.flip(frame, 0)
+                    print(frame.shape)
+                    img = Image.fromarray(frame)
+                    sample = {'image':img, 'label':img}
+                    sample = rgb_transform(sample)
+
+                    image = sample['image'].unsqueeze(dim=0)
+
+                    imgs, imgs_np,  masks = inference(image, model)
+
+                    fig = vis_segmentation(imgs_np[0], masks[0], fig)
+                    data = fig2img(fig)
+                    video_writer.write(data)
+            except KeyboardInterrupt:
+                print("KeyboardInterrupt : Bye bye bye")
+                sys.exit()
+
+
+

@@ -544,6 +544,10 @@ def get_args():
                         type=str,
                         default="513,513",
                         help='Image shape')
+    parser.add_argument('--hd',
+                        action='store_true',
+                        default=False,
+                        help='Add GaussCRF at the end of the model')
 
     # Adversarial loss
     parser.add_argument('--adversarial_loss',
@@ -578,12 +582,12 @@ def get_args():
                         help='Path to the spatial model when pretrained seperatly')
     parser.add_argument('--svc_kernel_size',
                         type=int,
-                        default=9,
-                        help='svc_kernel_size (default: 9)')
+                        default=11,
+                        help='svc_kernel_size (default: 11)')
     parser.add_argument('--train_distance',
                         type=int,
-                        default=3000,
-                        help='svc_kernel_size (default: 9)')
+                        default=1000,
+                        help='train_distance (default: 1000)')
     parser.add_argument('--flow',
                         action='store_true',
                         default=False,
@@ -594,7 +598,7 @@ def get_args():
                         action='store_true',
                         default=False,
                         help='Use camera for live demo (default: False)')
-    parser.add_argument('--demo_folders',
+    parser.add_argument('--demo_img_folder',
                         type=str,
                         default=None,
                         help='List of folders containing image on which to do inference')
@@ -606,6 +610,14 @@ def get_args():
                         type=str,
                         default=None,
                         help='path to a video to be processed')
+    parser.add_argument('--demo_temporal',
+                        action='store_true',
+                        default=False,
+                        help='Use temporal model (default: False)')
+    parser.add_argument('--demo_frame_fixed_schedule',
+                        type=int,
+                        default=10,
+                        help='train_distance (default: 10)')
 
     args = parser.parse_args()
 
@@ -645,6 +657,7 @@ def get_args():
             'cityscapes': 0.01,
             'pascal': 0.007,
             'isi_rgb': 0.01,
+            'isi_intensity': 0.01
         }
         args.lr = lrs[args.dataset.lower()] / (4 * len(args.gpu_ids)) * args.batch_size
 
@@ -700,5 +713,5 @@ def main():
 
 
 if __name__ == "__main__":
-    os.environ["CUDA_VISIBLE_DEVICES"]="2"
+    os.environ["CUDA_VISIBLE_DEVICES"]="1"
     main()

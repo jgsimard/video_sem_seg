@@ -176,12 +176,14 @@ class LowLatencyModel(nn.Module):
         self.steps_same_key_frame = 0
         self.fixed_schedule = fixed_schedule
         self.threshold = threshold
+        self.upsample = nn.Upsample(size=[513, 513], mode='bilinear', align_corners=True)
+
         _init_weight(self)
 
     def forward_spatial_model(self, cur_frame_low_features):
         self.key_frame_low_features = cur_frame_low_features
         self.key_frame_high_features = self.spatial_model.forward_high(cur_frame_low_features)
-        return self.key_frame_high_features
+        return self.upsample(self.key_frame_high_features)
 
     def compute_deviation(self, features_1, features_2):
         seg_map_1 = torch.argmax(features_1, dim=1)
@@ -214,6 +216,7 @@ class LowLatencyModel(nn.Module):
         else:
             cur_frame_low_features = self.spatial_model.forward_low(input)
             if self.key_frame_low_features is None:
+                self.steps_same_key_frame = 0
                 return self.forward_spatial_model(cur_frame_low_features)
 
             new_key_frame = False
@@ -226,11 +229,13 @@ class LowLatencyModel(nn.Module):
                     new_key_frame = True
 
             if new_key_frame:
+                self.steps_same_key_frame = 0
                 return self.forward_spatial_model(cur_frame_low_features)
             else:
+                self.steps_same_key_frame += 1
                 x = self.adaptive_feature_propagation(cur_frame_low_features, self.key_frame_low_features,
                                                       self.key_frame_high_features)
-                x = self.adapt_net(x, cur_frame_low_features)
+                x = self.adapt_net(cur_frame_low_features, x)
                 return x
 
 

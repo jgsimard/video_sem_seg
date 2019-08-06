@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-CUDA_VISIBLE_DEVICES=1;
-#DATASET_DIR=/home/deepsight/data/rgb_canulasse
+CUDA_VISIBLE_DEVICES=3;
 DATASET_DIR=/home/deepsight/data/rgb
-CHECKNAME=spatial-xception-adv-resume
+CHECKNAME=spatial-xception-adv-hd
 
 python train.py --backbone xception \
                 --lr 0.0001 \
@@ -22,6 +21,4 @@ python train.py --backbone xception \
                 --generator_loss_weight 0.001 \
                 --img_shape 513,513 \
                 --skip_classes cannula,instrument \
-                --resume ./scripts/run/isi_rgb/spatial-xception-adv/experiment_2/checkpoint.pth.tar
-#                --loss-type focal
-
+                --hd

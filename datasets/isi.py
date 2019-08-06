@@ -16,20 +16,21 @@ from datasets import custom_transforms as tr
 class DeepSightRGB(Dataset):
     NUM_CLASSES = 11
 
-    def __init__(self, root_dir, split="train"):
+    def __init__(self, root_dir, split="train", hd = False):
         self.root_dir = root_dir
         self.split = split
         self.imgs_dir = os.path.join(root_dir, "RGB_Images")
         self.masks_dir = os.path.join(root_dir, "Masks")
+        base_size = 1080 if hd else 513
         self.transform_train = transforms.Compose([tr.RandomHorizontalFlip(),
-                                                   tr.RandomScaleCrop(base_size=513, crop_size=513, fill=0),
+                                                   tr.RandomScaleCrop(base_size=base_size, crop_size=513, fill=0),
                                                    tr.RandomRotate(15),
                                                    tr.RandomGaussianBlur(),
                                                    tr.Normalize(mean=(0.5, 0.5, 0.5),
                                                                 std=(0.5, 0.5, 0.5)),
                                                    tr.ToTensor()])
 
-        self.transform_validation = transforms.Compose([tr.FixScaleCrop(crop_size=513),
+        self.transform_validation = transforms.Compose([tr.FixScaleCrop(crop_size=base_size),
                                                         tr.Normalize(mean=(0.5, 0.5, 0.5),
                                                                      std=(0.5, 0.5, 0.5)),
                                                         tr.ToTensor()])

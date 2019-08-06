@@ -115,7 +115,6 @@ def label2rgb(lbl, img=None, n_labels=None, alpha=0.5, colors=None):
     mask = create_pascal_label_colormap()[lbl].astype(np.uint8)
 
     if img is not None:
-        print(img.dtype, img.shape)
         img_gray = Image.fromarray(img).convert('LA')
         img_gray = np.asarray(img_gray.convert('RGB'))
         overlay = alpha * mask + (1 - alpha) * img_gray
