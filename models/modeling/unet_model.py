@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from .ops.depthconv.modules import DepthConv
 
 
 # sub-parts of the U-Net model
@@ -23,6 +24,26 @@ class double_conv(nn.Module):
         return x
 
 
+class double_conv_depth(nn.Module):
+    '''(conv => BN => ReLU) * 2'''
+
+    def __init__(self, in_ch, out_ch):
+        super(double_conv_depth, self).__init__()
+        self.dconv1 = DepthConv(in_ch, out_ch, 3, stride=1, padding=0, dilation=1),
+        self.bnrl = nn.Sequential(
+            nn.BatchNorm2d(out_ch),
+            nn.ReLU(inplace=True),
+        )
+        self.dconv2 = DepthConv(out_ch, out_ch, 3, stride=1, padding=0, dilation=1),
+
+    def forward(self, x, depth):
+        x = self.dconv1(x, depth)
+        x = self.bnrl(x)
+        x = self.dconv2(x, depth)
+        x = self.bnrl(x)
+        return x
+
+
 class inconv(nn.Module):
     def __init__(self, in_ch, out_ch):
         super(inconv, self).__init__()
@@ -30,6 +51,16 @@ class inconv(nn.Module):
 
     def forward(self, x):
         x = self.conv(x)
+        return x
+
+
+class inconv_depth(nn.Module):
+    def __init__(self, in_ch, out_ch):
+        super(inconv_depth, self).__init__()
+        self.conv = double_conv_depth(in_ch, out_ch)
+
+    def forward(self, x, depth):
+        x = self.conv(x, depth)
         return x
 
 
@@ -44,6 +75,20 @@ class down(nn.Module):
     def forward(self, x):
         x = self.mpconv(x)
         return x
+
+
+class down_depth(nn.Module):
+    def __init__(self, in_ch, out_ch):
+        super(down_depth, self).__init__()
+        self.mp = nn.MaxPool2d(2)
+        self.ap = nn.AvgPool2d(2)
+        self.dconv = double_conv_depth(in_ch, out_ch)
+
+    def forward(self, x, depth):
+        x = self.mp(x)
+        depth = self.ap(depth)
+        x = self.dconv(x, depth)
+        return x, depth
 
 
 class up(nn.Module):
@@ -78,6 +123,39 @@ class up(nn.Module):
         return x
 
 
+class up_depth(nn.Module):
+    def __init__(self, in_ch, out_ch, bilinear=True):
+        super(up_depth, self).__init__()
+
+        #  would be a nice idea if the upsampling could be learned too,
+        #  but my machine do not have enough memory to handle all those weights
+        if bilinear:
+            self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        else:
+            self.up = nn.ConvTranspose2d(in_ch // 2, in_ch // 2, 2, stride=2)
+
+        self.dconv = double_conv_depth(in_ch, out_ch)
+
+    def forward(self, x1, x2, depth):
+        x1 = self.up(x1)
+        depth = self.up(depth)
+
+        # input is CHW
+        diffY = x2.size()[2] - x1.size()[2]
+        diffX = x2.size()[3] - x1.size()[3]
+
+        x1 = F.pad(x1, (diffX // 2, diffX - diffX // 2,
+                        diffY // 2, diffY - diffY // 2))
+
+        # for padding issues, see
+        # https://github.com/HaiyongJiang/U-Net-Pytorch-Unstructured-Buggy/commit/0e854509c2cea854e247a9c615f175f76fbb2e3a
+        # https://github.com/xiaopeng-liao/Pytorch-UNet/commit/8ebac70e633bac59fc22bb5195e513d5832fb3bd
+
+        x = torch.cat([x2, x1], dim=1)
+        x = self.dconv(x, depth)
+        return x, depth
+
+
 class outconv(nn.Module):
     def __init__(self, in_ch, out_ch):
         super(outconv, self).__init__()
@@ -85,6 +163,16 @@ class outconv(nn.Module):
 
     def forward(self, x):
         x = self.conv(x)
+        return x
+
+
+class outconv_depth(nn.Module):
+    def __init__(self, in_ch, out_ch):
+        super(outconv_depth, self).__init__()
+        self.dconv = DepthConv(out_ch, out_ch, 1, stride=1, padding=0, dilation=1)
+
+    def forward(self, x, depth):
+        x = self.dconv(x, depth)
         return x
 
 
@@ -144,22 +232,39 @@ class UNetMedium(nn.Module):
 
 
 class UNetSmall(nn.Module):
-    def __init__(self, n_channels, n_classes):
+    def __init__(self, n_channels, n_classes, use_depthconv=False):
         super(UNetSmall, self).__init__()
-        self.inc = inconv(n_channels, 64)
-        self.down1 = down(64, 128)
-        self.down2 = down(128, 128)
-        self.up1 = up(256, 64)
-        self.up2 = up(128, 64)
-        self.outc = outconv(64, n_classes)
+        self.use_depthconv = use_depthconv
+        if self.use_depthconv:
+            self.inc = inconv_depth(n_channels, 64)
+            self.down1 = down_depth(64, 128)
+            self.down2 = down_depth(128, 128)
+            self.up1 = up_depth(256, 64)
+            self.up2 = up_depth(128, 64)
+            self.outc = outconv_depth(64, n_classes)
+        else:
+            self.inc = inconv(n_channels, 64)
+            self.down1 = down(64, 128)
+            self.down2 = down(128, 128)
+            self.up1 = up(256, 64)
+            self.up2 = up(128, 64)
+            self.outc = outconv(64, n_classes)
 
-    def forward(self, x):
-        x1 = self.inc(x)
-        x2 = self.down1(x1)
-        x3 = self.down2(x2)
-        x = self.up1(x3, x2)
-        x = self.up2(x, x1)
-        x = self.outc(x)
+    def forward(self, x, depth=None):
+        if self.use_depthconv:
+            x1 = self.inc(x, depth)
+            x2, depth2 = self.down1(x1, depth)
+            x3, depth3 = self.down2(x2, depth2)
+            x, depth2 = self.up1(x3, x2, depth3)
+            x, _ = self.up2(x, x1, depth2)
+            x = self.outc(x, depth)
+        else:
+            x1 = self.inc(x)
+            x2 = self.down1(x1)
+            x3 = self.down2(x2)
+            x = self.up1(x3, x2)
+            x = self.up2(x, x1)
+            x = self.outc(x)
 
         return x
 
@@ -180,7 +285,7 @@ if __name__ == '__main__':
     out = model_medium(feat)
     print(out.shape)
 
-    model_small = UNetSmall(n_channels=(13 + 1) * 4, n_classes=13).cuda()
+    model_small = UNetSmall(n_channels=(13 + 1) * 4, n_classes=13, use_depthconv=True).cuda()
     torchsummary.summary(model_small, ((13 + 1) * 4, 287, 352))
     out = model_small(feat)
     print(out.shape)
