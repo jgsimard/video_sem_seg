@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 CUDA_VISIBLE_DEVICES=3;
 DATASET_DIR=/home/deepsight/data/rgb
-CHECKNAME=spatial-xception-adv-hd
+CHECKNAME=spatial-xception-adv-CLEAN
 
 python train.py --backbone xception \
                 --lr 0.0001 \
-                --workers 32 \
+                --workers 16 \
                 --batch-size 12 \
                 --cuda_visible_devices 1 \
                 --gpu-ids 0 \
@@ -17,8 +17,7 @@ python train.py --backbone xception \
                 --optimizer Adam \
                 --adversarial_loss \
                 --lr_ratio 0.8 \
-                --n_critic 1 \
+                --n_critic 2 \
                 --generator_loss_weight 0.001 \
                 --img_shape 513,513 \
-                --skip_classes cannula,instrument \
-                --hd
+                --skip_classes cannula,instrument

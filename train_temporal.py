@@ -28,8 +28,10 @@ class TemporalTrainer(Trainer):
         for param in self.spatial_model.parameters():
             param.requires_grad = False
 
-        self.temporal_model = LowLatencyModel(self.spatial_model, kernel_size=self.args.svc_kernel_size,
-                                              flow=self.args.flow)
+        self.temporal_model = LowLatencyModel(self.spatial_model,
+                                              kernel_size=self.args.svc_kernel_size,
+                                              flow=self.args.flow,
+                                              seperable=args.temporal_separable)
         self.define_optimizer()
 
         if args.adversarial_loss:
@@ -239,5 +241,5 @@ def main():
 
 
 if __name__ == "__main__":
-    os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "1"
     main()

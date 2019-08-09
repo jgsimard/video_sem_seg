@@ -7,6 +7,7 @@ import torch
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
+from torchvision.utils import save_image
 from tqdm import tqdm
 import sys
 import signal
@@ -81,6 +82,7 @@ rgb_transform = transforms.Compose([tr.FixScaleCrop(crop_size=513),
 
 class DeepSightDemoRGB(Dataset):
     NUM_CLASSES = 11
+    CLASSES = ['background', 'ortable', 'psc', 'vsc', 'human', 'cielinglight', 'mayostand', 'table', 'anesthesiacart', 'cannula', 'instrument']
 
     def __init__(self, root_dir):
         self.root_dir = root_dir
@@ -127,7 +129,7 @@ class DeepSightDemoDepth(Dataset):
 
 
 class VideoWriter(object):
-    def __init__(self, directory, name="inference_video", fps=15, shape=(1500,500)):
+    def __init__(self, directory, name="inference_video", fps=30, shape=(1500,500)):
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         self.video_writer =  cv2.VideoWriter(os.path.join(directory, f'{name}_{int(time.time())}.mp4'), fourcc, fps, shape)
 
@@ -143,6 +145,7 @@ def inference(image, model):
     masks = []
     ts = time.time()
     output = model(image)
+    # output, flow = model(image)
     output = torch.argmax(output, dim=1)
     te = time.time()
     print(f'inference : {(te - ts) * 1000:2.2f} ms')
@@ -161,6 +164,7 @@ def inference(image, model):
         imgs.append(img)
 
     return imgs, imgs_np, masks
+    # return imgs, imgs_np, masks, flow
 
 def signal_handler(sig, frame, video_writer):
     print('You pressed Ctrl+C!')
@@ -181,7 +185,8 @@ if __name__ == "__main__":
         create_directory(transform_dir)
         for i, sample in enumerate(tqdm(data_loader)):
             image, target, names = sample['image'], sample['label'], sample['id']
-            imgs, imgs_np, masks = inference(image, model)
+            imgs, imgs_np, masks, flow = inference(image, model)
+            save_image(flow, os.path.join(pred_dir, "flow.png"))
             for i in range(len(imgs)):
                 masks[i].save(os.path.join(pred_dir, names[i]))
                 imgs[i].save(os.path.join(transform_dir, names[i]))
@@ -192,7 +197,7 @@ if __name__ == "__main__":
         # images = sorted(get_files(transform_dir), key=lambda x: int(x.split(".")[0][14:]))
         print(images)
         fig = None
-        with VideoWriter(pred_dir, name="test_imgs", fps=5) as video_writer:
+        with VideoWriter(pred_dir, name="test_imgs", fps=20) as video_writer:
             for img_name in images:
                 img = np.array(Image.open(os.path.join(transform_dir, img_name)))
                 pred = np.array(Image.open(os.path.join(pred_dir, img_name)))
@@ -235,9 +240,13 @@ if __name__ == "__main__":
 
                     image = sample['image'].unsqueeze(dim=0)
 
-                    imgs, imgs_np,  masks = inference(image, model)
-
-                    fig = vis_segmentation(imgs_np[0], masks[0], fig)
+                    imgs, imgs_np, masks = inference(image, model)
+                    # imgs, imgs_np,  masks, flow = inference(image, model)
+                    # if flow is not None:
+                    #     print("flow")
+                    #     save_image(flow, os.path.join("/home/deepsight2/jg_internship/video_sem_seg", "flow.png"))
+                    classes=['background', 'ortable', 'psc', 'vsc', 'human', 'cielinglight', 'mayostand', 'table', 'anesthesiacart', 'cannula', 'instrument']
+                    fig = vis_segmentation(imgs_np[0], masks[0], fig, classes=classes)
                     data = fig2img(fig)
                     video_writer.write(data)
             except KeyboardInterrupt:

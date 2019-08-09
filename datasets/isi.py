@@ -15,6 +15,7 @@ from datasets import custom_transforms as tr
 
 class DeepSightRGB(Dataset):
     NUM_CLASSES = 11
+    CLASSES = ['background', 'ortable', 'psc', 'vsc', 'human', 'cielinglight', 'mayostand', 'table', 'anesthesiacart', 'cannula', 'instrument']
 
     def __init__(self, root_dir, split="train", hd = False):
         self.root_dir = root_dir

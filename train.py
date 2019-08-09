@@ -592,6 +592,10 @@ def get_args():
                         action='store_true',
                         default=False,
                         help='Use feature flow for the kernel weights predictor (default: False)')
+    parser.add_argument('--temporal_separable',
+                        action='store_true',
+                        default=False,
+                        help='Use seperableConv2d instead of normal Conv2d in the temporal model')
 
     # Demo
     parser.add_argument('--demo_camera',
@@ -618,6 +622,11 @@ def get_args():
                         type=int,
                         default=10,
                         help='train_distance (default: 10)')
+    parser.add_argument('--validation_only',
+                        action='store_true',
+                        default=False,
+                        help='Only compute validation (default: False)')
+
 
     args = parser.parse_args()
 
@@ -704,14 +713,17 @@ def main():
     trainer = Trainer(args)
     print('Starting Epoch:', trainer.args.start_epoch)
     print('Total Epoches:', trainer.args.epochs)
-    for epoch in range(trainer.args.start_epoch, trainer.args.epochs):
-        trainer.training(epoch)
-        if not trainer.args.no_val and epoch % args.eval_interval == (args.eval_interval - 1):
-            trainer.validation(epoch)
+    if args.validation_only:
+        trainer.validation(0)
+    else:
+        for epoch in range(trainer.args.start_epoch, trainer.args.epochs):
+            trainer.training(epoch)
+            if not trainer.args.no_val and epoch % args.eval_interval == (args.eval_interval - 1):
+                trainer.validation(epoch)
 
     trainer.writer.close()
 
 
 if __name__ == "__main__":
-    os.environ["CUDA_VISIBLE_DEVICES"]="1"
+    os.environ["CUDA_VISIBLE_DEVICES"]="2"
     main()

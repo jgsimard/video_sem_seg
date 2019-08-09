@@ -60,14 +60,23 @@ def label_to_color_image(label):
 
     return colormap[label]
 
+CLASSES = np.asarray(
+    ['background', 'ortable', 'psc', 'vsc', 'human', 'cielinglight', 'mayostand', 'table', 'anesthesiacart', 'cannula',
+     'instrument'])
+FULL_LABEL_MAP = np.arange(len(CLASSES)).reshape(len(CLASSES), 1)
+FULL_COLOR_MAP = label_to_color_image(FULL_LABEL_MAP)
 
-def vis_segmentation(image, seg_map, fig=None):
+def vis_segmentation(image, seg_map, fig=None, classes=None):
     """Visualizes input image, segmentation map and overlay view."""
     # plt.ion()
     if fig is None:
         fig = plt.figure(figsize=(15, 5))
     seg_image, overlay_image = label2rgb(seg_map, image)
-    grid_spec = gridspec.GridSpec(1, 3, width_ratios=[6, 6, 6])
+    if classes is not None:
+        grid_spec = gridspec.GridSpec(1, 4, width_ratios=[6, 6, 6, 1])
+    else:
+        grid_spec = gridspec.GridSpec(1, 3, width_ratios=[6, 6, 6])
+
 
     plt.subplot(grid_spec[0])
     plt.imshow(image)
@@ -84,14 +93,18 @@ def vis_segmentation(image, seg_map, fig=None):
     plt.axis('off')
     plt.title('segmentation overlay')
 
-    # unique_labels = np.unique(seg_map)
-    # ax = plt.subplot(grid_spec[3])
-    # plt.imshow(FULL_COLOR_MAP[unique_labels].astype(np.uint8), interpolation='nearest')
-    # ax.yaxis.tick_right()
-    # plt.yticks(range(len(unique_labels)), LABEL_NAMES[unique_labels])
-    # plt.xticks([], [])
-    # ax.tick_params(width=0.0)
-    # plt.grid('off')
+    if classes is not None:
+        classes = np.array(classes)
+        full_label_map = np.arange(len(classes)).reshape(len(classes), 1)
+        full_color_map = label_to_color_image(full_label_map)
+        unique_labels = np.unique(seg_map)
+        ax = plt.subplot(grid_spec[3])
+        plt.imshow(full_color_map[unique_labels].astype(np.uint8), interpolation='nearest')
+        ax.yaxis.tick_right()
+        plt.yticks(range(len(unique_labels)), classes[unique_labels])
+        plt.xticks([], [])
+        ax.tick_params(width=0.0)
+        plt.grid('off')
     # fig.canvas.draw()
     # plt.close()
     # plt.ion()
