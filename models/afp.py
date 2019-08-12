@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 from models.modeling.sync_batchnorm.batchnorm import SynchronizedBatchNorm2d
-
+from models.modeling.backbone.xception import SeparableConv2d
 from models.rep_flow_layer import FlowLayer
 
 
@@ -24,48 +24,60 @@ def _init_weight(module):
             m.bias.data.zero_()
 
 class AdaptNet(nn.Module):
-    def __init__(self, in_channels=128, size=[513, 513]):
+    def __init__(self, in_channels=128, size=[513, 513], seperable=False):
         super(AdaptNet, self).__init__()
-        self.apapt_low = nn.Sequential(
-            nn.Conv2d(in_channels=in_channels, out_channels=256, kernel_size=3, padding=1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(),
-            nn.Conv2d(in_channels=256, out_channels=256, kernel_size=3, padding=1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(),
-            nn.Conv2d(in_channels=256, out_channels=256, kernel_size=3, padding=1),
-            nn.ReLU()
-        )
-        # self.apapt_high = nn.Sequential(
-        #     nn.Conv2d(in_channels=11, out_channels=256, kernel_size=3, padding=1),
-        #     nn.ReLU(),
-        #     nn.Conv2d(in_channels=256, out_channels=256, kernel_size=3, padding=1),
-        #     nn.ReLU()
-        # )
-        self.mix = nn.Sequential(
-            nn.Conv2d(in_channels=256+11, out_channels=128, kernel_size=3, padding=1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(),
-            nn.Conv2d(in_channels=128, out_channels=11, kernel_size=3, padding=1),
-            nn.ReLU()
-        )
+        if seperable:
+            self.apapt_low = nn.Sequential(
+                SeparableConv2d(in_channels, 256, kernel_size=3, BatchNorm=nn.BatchNorm2d),
+                nn.ReLU(),
+                SeparableConv2d(256, 256, kernel_size=3, BatchNorm=nn.BatchNorm2d),
+                nn.ReLU(),
+                SeparableConv2d(256, 256, kernel_size=3, BatchNorm=nn.BatchNorm2d),
+                nn.ReLU()
+            )
+            self.mix = nn.Sequential(
+                SeparableConv2d(256+11, 128, kernel_size=3, BatchNorm=nn.BatchNorm2d),
+                nn.ReLU(),
+                SeparableConv2d(128, 11, kernel_size=3, BatchNorm=nn.BatchNorm2d),
+                nn.ReLU()
+            )
+        else:
+            self.apapt_low = nn.Sequential(
+                nn.Conv2d(in_channels, 256, kernel_size=3, padding=1),
+                nn.BatchNorm2d(256),
+                nn.ReLU(),
+                nn.Conv2d(in_channels=256, out_channels=256, kernel_size=3, padding=1),
+                nn.BatchNorm2d(256),
+                nn.ReLU(),
+                nn.Conv2d(in_channels=256, out_channels=256, kernel_size=3, padding=1),
+                nn.ReLU()
+            )
+            self.mix = nn.Sequential(
+                nn.Conv2d(in_channels=256+11, out_channels=128, kernel_size=3, padding=1),
+                nn.BatchNorm2d(128),
+                nn.ReLU(),
+                nn.Conv2d(in_channels=128, out_channels=11, kernel_size=3, padding=1),
+                nn.ReLU()
+            )
         self.upsample = nn.Upsample(size=size, mode='bilinear', align_corners=True)
         _init_weight(self)
 
     def forward(self, low, high):
         adapted_low = self.apapt_low(low)
-        # adapted_high = self.apapt_high(high)
-        adapted_high = high
-        x = torch.cat((adapted_low, adapted_high), dim=1)
+        x = torch.cat((adapted_low, high), dim=1)
         x = self.mix(x)
         x = self.upsample(x)
         return x
 
 class AdaptiveKeyFrameSelector(nn.Module):
-    def __init__(self, in_channels=128):
+    def __init__(self, in_channels=128, seperable=False):
         super(AdaptiveKeyFrameSelector, self).__init__()
-        self.conv_reduce = nn.Conv2d(in_channels=in_channels, out_channels=256, kernel_size=3)
-        self.conv_2 = nn.Conv2d(in_channels=256, out_channels=256, kernel_size=3)
+        if seperable:
+            self.conv_reduce = SeparableConv2d(in_channels, 256, kernel_size=3, BatchNorm=nn.BatchNorm2d)
+            self.conv_2 = SeparableConv2d(256, 256, kernel_size=3, BatchNorm=nn.BatchNorm2d)
+        else:
+            self.conv_reduce = nn.Conv2d(in_channels=in_channels, out_channels=256, kernel_size=3)
+            self.conv_2 = nn.Conv2d(in_channels=256, out_channels=256, kernel_size=3)
         self.pred = nn.Linear(256, 1)
         _init_weight(self)
 
@@ -81,12 +93,17 @@ class AdaptiveKeyFrameSelector(nn.Module):
 
 class KernelWeightPredictor(nn.Module):
     # Produces the weights used for the Spatially Variant Convolution
-    def __init__(self, in_channels=128, kernel_size=7):
-        self.k = kernel_size
+    def __init__(self, in_channels=128, kernel_size=7, seperable=False):
         super(KernelWeightPredictor, self).__init__()
-        self.conv_reduce = nn.Conv2d(in_channels=in_channels, out_channels=256, kernel_size=3, padding=1)
-        self.conv_2 = nn.Conv2d(in_channels=512, out_channels=256, kernel_size=3, padding=1)
-        self.conv_3 = nn.Conv2d(in_channels=256, out_channels=self.k ** 2, kernel_size=1)
+        self.k = kernel_size
+        if seperable:
+            self.conv_reduce = SeparableConv2d(in_channels, 256, kernel_size=3, BatchNorm=nn.BatchNorm2d)
+            self.conv_2 = SeparableConv2d(512, 256, kernel_size=3, BatchNorm=nn.BatchNorm2d)
+            self.conv_3 = SeparableConv2d(256, self.k ** 2, kernel_size=3, BatchNorm=nn.BatchNorm2d)
+        else:
+            self.conv_reduce = nn.Conv2d(in_channels=in_channels, out_channels=256, kernel_size=3, padding=1)
+            self.conv_2 = nn.Conv2d(in_channels=512, out_channels=256, kernel_size=3, padding=1)
+            self.conv_3 = nn.Conv2d(in_channels=256, out_channels=self.k ** 2, kernel_size=1)
         _init_weight(self)
 
     def forward(self, current_frame_low_features, key_frame_low_features):
@@ -105,23 +122,30 @@ class KernelWeightPredictor(nn.Module):
 
 class KernelWeightPredictorFlow(nn.Module):
     # Produces the weights used for the Spatially Variant Convolution using a representation flow layer
-    def __init__(self, in_channels=128, kernel_size=7, learnable=[1,1,1,1,1], flow_channels=32, n_iter=5):
-        self.k = kernel_size
+    def __init__(self, in_channels=128, kernel_size=7, learnable=[1,1,1,1,1], flow_channels=32, n_iter=5, seperable=False):
         super(KernelWeightPredictorFlow, self).__init__()
-        self.conv_reduce = nn.Conv2d(in_channels=in_channels, out_channels=flow_channels, kernel_size=3, padding=1)
-        self.flow_layer = FlowLayer(channels=flow_channels, n_iter=n_iter, params=learnable)
-        self.conv_expand = nn.Conv2d(in_channels=flow_channels, out_channels=self.k ** 2, kernel_size=3, padding=1)
+        self.k = kernel_size
+        if seperable:
+            self.conv_reduce = SeparableConv2d(in_channels, flow_channels, kernel_size=3, BatchNorm=nn.BatchNorm2d)
+            self.conv_expand = SeparableConv2d(flow_channels, self.k ** 2, kernel_size=3, BatchNorm=nn.BatchNorm2d)
+        else:
+            self.conv_reduce = nn.Conv2d(in_channels=in_channels, out_channels=flow_channels, kernel_size=3, padding=1)
+            self.conv_expand = nn.Conv2d(in_channels=flow_channels, out_channels=self.k ** 2, kernel_size=3, padding=1)
 
+        self.flow_layer = FlowLayer(channels=flow_channels, n_iter=n_iter, params=learnable)
     def forward(self, current_frame_low_features, key_frame_low_features):
         cur = F.relu(self.conv_reduce(current_frame_low_features))
         key = F.relu(self.conv_reduce(key_frame_low_features))
         x = torch.stack((key, cur), 2) # b, c, t, h, w = x.size()
         x = self.flow_layer(x)
+        # flow = x
+        # print(f"flow={flow.shape}")
         x = x.squeeze()
         x = F.relu(self.conv_expand(x))
         b, k2, h, w = x.shape
         x = x.permute(0, 2, 3, 1).view(b, h, w, self.k, self.k)
         return x
+        # return x, flow
 
 
 class SpatiallyVariantConvolution(nn.Module):
@@ -144,7 +168,7 @@ class SpatiallyVariantConvolution(nn.Module):
 
 
 class AdaptiveFeaturePropagation(nn.Module):
-    def __init__(self, in_channels=128, kernel_size=7, flow=False):
+    def __init__(self, in_channels=128, kernel_size=7, flow=False, seperable=False):
         super(AdaptiveFeaturePropagation, self).__init__()
         # self.upsample = nn.Upsample(size=size, mode='bilinear')
         if flow:
@@ -155,18 +179,18 @@ class AdaptiveFeaturePropagation(nn.Module):
         _init_weight(self)
 
     def forward(self, current_frame_low_features, key_frame_low_features, key_frame_high_features):
-        # current_frame_low_features_upsampled = self.upsample(current_frame_low_features)
-        # key_frame_low_features_upsampled = self.upsample(key_frame_low_features)
-        spatially_variant_kernels = self.kernel_weight_predictor(current_frame_low_features,
-                                                                 key_frame_low_features)
+        # spatially_variant_kernels, flow = self.kernel_weight_predictor(current_frame_low_features, key_frame_low_features)
+        # return self.spatially_variant_convolution(spatially_variant_kernels, key_frame_high_features), flow
+
+        spatially_variant_kernels = self.kernel_weight_predictor(current_frame_low_features, key_frame_low_features)
         return self.spatially_variant_convolution(spatially_variant_kernels, key_frame_high_features)
 
 
 class LowLatencyModel(nn.Module):
-    def __init__(self, spatial_model, threshold=0.3, fixed_schedule=5, kernel_size=11, flow=False):
+    def __init__(self, spatial_model, threshold=0.3, fixed_schedule=5, kernel_size=11, flow=False, seperable=False):
         super(LowLatencyModel, self).__init__()
-        self.adaptive_feature_propagation = AdaptiveFeaturePropagation(in_channels=128, kernel_size=kernel_size, flow=flow)
-        self.adaptive_key_frame_selector = AdaptiveKeyFrameSelector()
+        self.adaptive_feature_propagation = AdaptiveFeaturePropagation(in_channels=128, kernel_size=kernel_size, flow=flow, seperable=seperable)
+        self.adaptive_key_frame_selector = AdaptiveKeyFrameSelector(seperable=seperable)
         self.adapt_net = AdaptNet()
         self.spatial_model = spatial_model
 
@@ -176,12 +200,14 @@ class LowLatencyModel(nn.Module):
         self.steps_same_key_frame = 0
         self.fixed_schedule = fixed_schedule
         self.threshold = threshold
+        self.upsample = nn.Upsample(size=[513, 513], mode='bilinear', align_corners=True)
+
         _init_weight(self)
 
     def forward_spatial_model(self, cur_frame_low_features):
         self.key_frame_low_features = cur_frame_low_features
         self.key_frame_high_features = self.spatial_model.forward_high(cur_frame_low_features)
-        return self.key_frame_high_features
+        return self.upsample(self.key_frame_high_features), None
 
     def compute_deviation(self, features_1, features_2):
         seg_map_1 = torch.argmax(features_1, dim=1)
@@ -214,6 +240,7 @@ class LowLatencyModel(nn.Module):
         else:
             cur_frame_low_features = self.spatial_model.forward_low(input)
             if self.key_frame_low_features is None:
+                self.steps_same_key_frame = 0
                 return self.forward_spatial_model(cur_frame_low_features)
 
             new_key_frame = False
@@ -226,12 +253,18 @@ class LowLatencyModel(nn.Module):
                     new_key_frame = True
 
             if new_key_frame:
+                self.steps_same_key_frame = 0
                 return self.forward_spatial_model(cur_frame_low_features)
             else:
+                self.steps_same_key_frame += 1
                 x = self.adaptive_feature_propagation(cur_frame_low_features, self.key_frame_low_features,
                                                       self.key_frame_high_features)
-                x = self.adapt_net(x, cur_frame_low_features)
+                x = self.adapt_net(cur_frame_low_features, x)
                 return x
+                # x, flow = self.adaptive_feature_propagation(cur_frame_low_features, self.key_frame_low_features,
+                #                                             self.key_frame_high_features)
+                # x = self.adapt_net(cur_frame_low_features, x)
+                # return x, flow
 
 
 if __name__ == '__main__':

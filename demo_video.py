@@ -7,178 +7,86 @@ import torch
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
+from torchvision.utils import save_image
 from tqdm import tqdm
+import sys
+import signal
 
 import models.convcrf as convcrf
 from datasets import custom_transforms as tr
 from models.modeling.deeplab import DeepLab
 from models.modeling.sync_batchnorm.replicate import patch_replication_callback
-from visualization import fig2img, vis_segmentation
+from utils.visualization import fig2img, vis_segmentation
+from utils.utils import get_files, create_directory, timeit
+from train import get_args
+import time
+from models.afp import LowLatencyModel
 
 
-def load_model(args, nclass=11):
-    # loading saved model
-    if not os.path.isfile(args.resume):
-        raise RuntimeError(f"=> no checkpoint found at '{args.resume}'")
-    checkpoint = torch.load(args.resume)
+def load_model(args, nclass=11, temporal=False):
+    if not temporal:
+        if not os.path.isfile(args.resume):
+            raise RuntimeError(f"=> no checkpoint found at '{args.resume}'")
+        checkpoint = torch.load(args.resume)
 
-    # deeplab
-    model = DeepLab(num_classes=nclass,
-                    backbone=args.backbone,
-                    output_stride=args.out_stride,
-                    sync_bn=args.sync_bn,
-                    freeze_bn=args.freeze_bn)
+        # deeplab
+        model = DeepLab(num_classes=nclass,
+                        backbone=args.backbone,
+                        output_stride=args.out_stride,
+                        sync_bn=args.sync_bn,
+                        freeze_bn=args.freeze_bn)
 
-    model = torch.nn.DataParallel(model, device_ids=args.gpu_ids)
-    patch_replication_callback(model)
-    model = model.cuda()
+        model = torch.nn.DataParallel(model, device_ids=args.gpu_ids)
+        patch_replication_callback(model)
+        model = model.cuda()
 
-    model.module.load_state_dict(checkpoint['state_dict'])
+        model.module.load_state_dict(checkpoint['state_dict'])
+        model.eval()
+        return model
+    else:
+        spatial_model = DeepLab(num_classes=nclass,
+                                backbone=args.backbone,
+                                output_stride=args.out_stride,
+                                sync_bn=args.sync_bn,
+                                freeze_bn=True)
+        # Fix deeplab as the features extractor
+        for param in spatial_model.parameters():
+            param.requires_grad = False
 
-    # crf
-    crf = None
-    if args.GaussCrf:
-        if args.TrainCrf:
-            conf = convcrf.isi_trainable_conf
-        else:
-            conf = convcrf.isi_untrainable_conf
+        temporal_model = LowLatencyModel(spatial_model, kernel_size=args.svc_kernel_size, flow=args.flow, fixed_schedule=args.demo_frame_fixed_schedule)
 
-        if args.dataset == "isi_rgb":
-            shape = (513, 513)
-        elif args.dataset == "isi_intensity":
-            shape = (287, 352)
-        crf = convcrf.GaussCRF(conf=conf, shape=shape, nclasses=nclass)
+        # CUDA
+        spatial_model = torch.nn.DataParallel(spatial_model, device_ids=args.gpu_ids)
+        patch_replication_callback(spatial_model)
+        spatial_model = spatial_model.cuda()
 
-        # crf on cuda
-        crf = torch.nn.DataParallel(crf, device_ids=args.gpu_ids)
-        patch_replication_callback(crf)
-        crf = crf.cuda()
-        if 'crf_state_dict' in checkpoint:
-            if checkpoint['crf_state_dict'] is not None:
-                print("loading crf")
-                crf.module.load_state_dict(checkpoint['crf_state_dict'])
+        temporal_model = torch.nn.DataParallel(temporal_model, device_ids=args.gpu_ids)
+        patch_replication_callback(temporal_model)
+        temporal_model = temporal_model.cuda()
 
-    return model, crf
+        # LOAD
+        checkpoint = torch.load(args.resume)
+        spatial_model.module.load_state_dict(checkpoint['spatial_model_state_dict'])
+        temporal_model.module.load_state_dict(checkpoint['temporal_model_state_dict'])
+
+        #EVAL
+        temporal_model.eval()
+
+        return temporal_model
 
 
-def get_args():
-    parser = argparse.ArgumentParser(description="PyTorch DeeplabV3Plus DEMO")
-    parser.add_argument('--backbone',
-                        type=str,
-                        default='resnet',
-                        choices=['resnet', 'xception', 'drn', 'mobilenet'],
-                        help='backbone name (default: resnet)')
-    parser.add_argument('--out-stride',
-                        type=int,
-                        default=16,
-                        help='network output stride (default: 8)')
-    parser.add_argument('--dataset',
-                        type=str,
-                        default='isi',
-                        choices=['pascal', 'coco', 'cityscapes', 'isi_rgb', 'isi_intensity', 'isi_depth',
-                                 'isi_intensi'],
-                        help='dataset name (default: isi)')
-    parser.add_argument('--workers',
-                        type=int,
-                        default=4,
-                        metavar='N',
-                        help='dataloader threads')
-    parser.add_argument('--base-size',
-                        type=int,
-                        default=513,
-                        help='base image size')
-    parser.add_argument('--crop-size',
-                        type=int,
-                        default=513,
-                        help='crop image size')
-    parser.add_argument('--sync-bn',
-                        type=bool,
-                        default=None,
-                        help='whether to use sync bn (default: auto)')
-    parser.add_argument('--freeze-bn',
-                        type=bool,
-                        default=False,
-                        help='whether to freeze bn parameters (default: False)')
-
-    # cuda, seed and logging
-    parser.add_argument('--no-cuda',
-                        action='store_true',
-                        default=False,
-                        help='disables CUDA training')
-    parser.add_argument('--gpu-ids',
-                        type=str,
-                        default='0',
-                        help='use which gpu to train, must be a comma-separated list of integers only (default=0)')
-    parser.add_argument('--seed',
-                        type=int,
-                        default=1,
-                        metavar='S',
-                        help='random seed (default: 1)')
-    # checking point
-    parser.add_argument('--resume',
-                        type=str,
-                        default=None,
-                        help='put the path to resuming file if needed')
-    parser.add_argument('--checkname',
-                        type=str,
-                        default=None,
-                        help='set the checkpoint name')
-    # ISI
-    parser.add_argument('--dataset_dir',
-                        type=str,
-                        default='/home/deepsight2/development/data/rgb',
-                        help='put the path to dataset root dir')
-    parser.add_argument('--GaussCrf',
-                        action='store_true',
-                        default=False,
-                        help='Add GaussCRF at the end of the model')
-    parser.add_argument('--TrainCrf',
-                        action='store_true',
-                        default=False,
-                        help='Train GaussCRF at the end of the model')
-    parser.add_argument('--crf_start_epoch',
-                        type=int,
-                        default=0,
-                        help='Epoch at which to start training the CRF (not stable if trained from the begining!)')
-    parser.add_argument('--imgs_folder',
-                        type=str,
-                        default=None,
-                        help='folder containing images to be processed')
-    parser.add_argument('--video_path',
-                        type=str,
-                        default=None,
-                        help='path to a video to be processed')
-
-    args = parser.parse_args()
-
-    args.cuda = not args.no_cuda and torch.cuda.is_available()
-    if args.cuda:
-        try:
-            args.gpu_ids = [int(s) for s in args.gpu_ids.split(',')]
-        except ValueError:
-            raise ValueError('Argument --gpu_ids must be a comma-separated list of integers only')
-
-    if args.sync_bn is None:
-        if args.cuda and len(args.gpu_ids) > 1:
-            args.sync_bn = True
-        else:
-            args.sync_bn = False
-
-    if args.checkname is None:
-        args.checkname = 'deeplab-' + str(args.backbone)
-    return args
-
+rgb_transform = transforms.Compose([tr.FixScaleCrop(crop_size=513),
+                                    tr.Normalize(mean=(0.5, 0.5, 0.5),
+                                                 std=(0.5, 0.5, 0.5)),
+                                    tr.ToTensor()])
 
 class DeepSightDemoRGB(Dataset):
     NUM_CLASSES = 11
+    CLASSES = ['background', 'ortable', 'psc', 'vsc', 'human', 'cielinglight', 'mayostand', 'table', 'anesthesiacart', 'cannula', 'instrument']
 
     def __init__(self, root_dir):
         self.root_dir = root_dir
-        self.transform = transforms.Compose([tr.FixScaleCrop(crop_size=513),
-                                             tr.Normalize(mean=(0.5, 0.5, 0.5),
-                                                          std=(0.5, 0.5, 0.5)),
-                                             tr.ToTensor()])
-
+        self.transform = rgb_transform
         self.images = [f for f in os.listdir(self.root_dir) if os.path.isfile(os.path.join(self.root_dir, f))]
 
     def __len__(self):
@@ -211,6 +119,7 @@ class DeepSightDemoDepth(Dataset):
     def __getitem__(self, item):
         path = os.path.join(self.root_dir, self.images[item])
         img = Image.open(path)
+        img = img.transpose(Image.FLIP_TOP_BOTTOM)
         label = Image.open(path)
         sample = {'image': img, 'label': label}
         sample = self.transform(sample)
@@ -218,64 +127,131 @@ class DeepSightDemoDepth(Dataset):
         return sample
 
 
-def get_files(path):
-    return [f for f in os.listdir(path) if os.path.isfile(os.path.join(path, f))]
 
+class VideoWriter(object):
+    def __init__(self, directory, name="inference_video", fps=30, shape=(1500,500)):
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        self.video_writer =  cv2.VideoWriter(os.path.join(directory, f'{name}_{int(time.time())}.mp4'), fourcc, fps, shape)
 
-def create_directory(directory):
-    if not os.path.exists(directory):
-        os.makedirs(directory)
+    def __enter__(self):
+        return self.video_writer
 
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.video_writer.release()
+
+def inference(image, model):
+    imgs = []
+    imgs_np = []
+    masks = []
+    ts = time.time()
+    output = model(image)
+    # output, flow = model(image)
+    output = torch.argmax(output, dim=1)
+    te = time.time()
+    print(f'inference : {(te - ts) * 1000:2.2f} ms')
+
+    for i in range(output.shape[0]):
+        mask = output[i, :, :].cpu().numpy().astype(np.uint8)
+        mask = Image.fromarray(mask)
+        masks.append(mask)
+
+        img = (image[i, :, :, :] * 0.5 + 0.5) * 255
+        img = img.cpu().numpy().astype(np.uint8)
+        img = np.transpose(img, (1, 2, 0))
+        imgs_np.append(img)
+
+        img = Image.fromarray(img)
+        imgs.append(img)
+
+    return imgs, imgs_np, masks
+    # return imgs, imgs_np, masks, flow
+
+def signal_handler(sig, frame, video_writer):
+    print('You pressed Ctrl+C!')
+    video_writer.release()
+    sys.exit(0)
 
 if __name__ == "__main__":
     args = get_args()
-    # main()
-    # path = "/home/deepsight/DeepSightData/Example ToF sequences for inferrence/LabelMeImages/Docked 1"
-    # depth_demo_dataset = DeepSightDemoDepth(path)
-    model, crf = load_model(args, nclass=11)
-    model.eval()
-    crf.eval()
+    model = load_model(args, nclass=11, temporal=args.demo_temporal)
 
-    for id in ['33', '46', '80', '18']:
-        path = f"/home/deepsight/data/rgb/validation_video/{id}"
-        depth_demo_dataset = DeepSightDemoRGB(path)
-
-        print(len(depth_demo_dataset))
-        data_loader = DataLoader(depth_demo_dataset, batch_size=16, shuffle=True)
-        pred_dir = os.path.join(path, "pred")
-        transform_dir = os.path.join(path, "transform")
+    if args.demo_img_folder is not None:
+        # rgb_demo_dataset = DeepSightDemoRGB(args.demo_img_folder)
+        rgb_demo_dataset = DeepSightDemoDepth(args.demo_img_folder)
+        data_loader = DataLoader(rgb_demo_dataset, batch_size=32, shuffle=True)
+        pred_dir = os.path.join(args.demo_img_folder, "pred")
+        transform_dir = os.path.join(args.demo_img_folder, "transform")
         create_directory(pred_dir)
         create_directory(transform_dir)
-
         for i, sample in enumerate(tqdm(data_loader)):
             image, target, names = sample['image'], sample['label'], sample['id']
-            output = model(image)
-            if crf is not None:
-                output = crf(output, image)
-            output = torch.argmax(output, dim=1)
-            for i in range(output.shape[0]):
-                img = Image.fromarray(output[i, :, :].cpu().numpy().astype(np.uint8))
-                img.save(os.path.join(pred_dir, names[i]))
+            imgs, imgs_np, masks, flow = inference(image, model)
+            save_image(flow, os.path.join(pred_dir, "flow.png"))
+            for i in range(len(imgs)):
+                masks[i].save(os.path.join(pred_dir, names[i]))
+                imgs[i].save(os.path.join(transform_dir, names[i]))
 
-                img = Image.fromarray(
-                    np.transpose(((image[i, :, :, :] * 0.5 + 0.5) * 255).cpu().numpy().astype(np.uint8), (1, 2, 0)))
-                img.save(os.path.join(transform_dir, names[i]))
-
-            # output = crf(model(image), image)
-            # print(output.shape, names)
-
+        # create the video
+        # images = sorted(get_files(transform_dir))
         images = sorted(get_files(transform_dir), key=lambda x: int(x.split(".")[0]))
+        # images = sorted(get_files(transform_dir), key=lambda x: int(x.split(".")[0][14:]))
         print(images)
-
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(f'{pred_dir}_video.mp4', fourcc, 10.0, (1500, 500))
-
         fig = None
-        for img_name in images:
-            img = np.array(Image.open(os.path.join(transform_dir, img_name)))
-            pred = np.array(Image.open(os.path.join(pred_dir, img_name)))
+        with VideoWriter(pred_dir, name="test_imgs", fps=20) as video_writer:
+            for img_name in images:
+                img = np.array(Image.open(os.path.join(transform_dir, img_name)))
+                pred = np.array(Image.open(os.path.join(pred_dir, img_name)))
 
-            fig = vis_segmentation(img, pred, fig)
-            data = fig2img(fig)
-            out.write(data)
-        out.release()
+                fig = vis_segmentation(img, pred, fig)
+                data = fig2img(fig)
+                video_writer.write(data)
+
+
+    stream = None
+    if args.demo_video_path is not None:
+        stream = cv2.VideoCapture(args.demo_video_path)
+    elif args.demo_camera:
+        stream = cv2.VideoCapture(0)
+
+
+    if stream is not None:
+        fig = None
+        output_video_directory = args.demo_video_output if args.demo_video_output is not None else os.getcwd()
+        output_video_directory = args.demo_video_output if args.demo_video_output is not None else os.getcwd()
+
+        with VideoWriter(output_video_directory, name="test_video_spatial") as video_writer:
+            signal.signal(signal.SIGINT, lambda x,y: signal_handler(x,y,video_writer))
+            try:
+                while(stream.isOpened()):
+                    read_succesful, frame = stream.read()
+                    if not read_succesful:
+                        print(read_succesful)
+                        continue
+
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    #for ZED
+                    # frame_w = frame.shape[1]
+                    # frame = frame[:,:int(frame_w/2), :]
+                    # frame = cv2.flip(frame, 0)
+                    print(frame.shape)
+                    img = Image.fromarray(frame)
+                    sample = {'image':img, 'label':img}
+                    sample = rgb_transform(sample)
+
+                    image = sample['image'].unsqueeze(dim=0)
+
+                    imgs, imgs_np, masks = inference(image, model)
+                    # imgs, imgs_np,  masks, flow = inference(image, model)
+                    # if flow is not None:
+                    #     print("flow")
+                    #     save_image(flow, os.path.join("/home/deepsight2/jg_internship/video_sem_seg", "flow.png"))
+                    classes=['background', 'ortable', 'psc', 'vsc', 'human', 'cielinglight', 'mayostand', 'table', 'anesthesiacart', 'cannula', 'instrument']
+                    fig = vis_segmentation(imgs_np[0], masks[0], fig, classes=classes)
+                    data = fig2img(fig)
+                    video_writer.write(data)
+            except KeyboardInterrupt:
+                print("KeyboardInterrupt : Bye bye bye")
+                sys.exit()
+
+
+

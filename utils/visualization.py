@@ -1,49 +1,39 @@
+import cv2
 import numpy as np
+from PIL import Image
 from matplotlib import gridspec
 from matplotlib import pyplot as plt
-import cv2
-from PIL import Image
 
 
 def create_pascal_label_colormap():
-  """Creates a label colormap used in PASCAL VOC segmentation benchmark.
+    """Creates a label colormap used in PASCAL VOC segmentation benchmark.
 
-  Returns:
-    A colormap for visualizing segmentation results.
-  """
-  # Max number of entries in the colormap for each dataset.
-  # Dataset names.
-  _ADE20K = 'ade20k'
-  _CITYSCAPES = 'cityscapes'
-  _PASCAL = 'pascal'
+    Returns:
+      A colormap for visualizing segmentation results.
+    """
 
-  _DATASET_MAX_ENTRIES = {
-      _ADE20K: 151,
-      _CITYSCAPES: 19,
-      _PASCAL: 256,
-  }
+    def bit_get(val, idx):
+        """Gets the bit value.
 
-  def bit_get(val, idx):
-      """Gets the bit value.
+        Args:
+          val: Input value, int or numpy int array.
+          idx: Which bit of the input val.
 
-      Args:
-        val: Input value, int or numpy int array.
-        idx: Which bit of the input val.
+        Returns:
+          The "idx"-th bit of input val.
+        """
+        return (val >> idx) & 1
 
-      Returns:
-        The "idx"-th bit of input val.
-      """
-      return (val >> idx) & 1
+    colormap = np.zeros((256, 3), dtype=int)
+    ind = np.arange(256, dtype=int)
 
-  colormap = np.zeros((_DATASET_MAX_ENTRIES[_PASCAL], 3), dtype=int)
-  ind = np.arange(_DATASET_MAX_ENTRIES[_PASCAL], dtype=int)
+    for shift in reversed(range(8)):
+        for channel in range(3):
+            colormap[:, channel] |= bit_get(ind, channel) << shift
+        ind >>= 3
 
-  for shift in reversed(range(8)):
-    for channel in range(3):
-      colormap[:, channel] |= bit_get(ind, channel) << shift
-    ind >>= 3
+    return colormap
 
-  return colormap
 
 def label_to_color_image(label):
     """Adds color defined by the dataset colormap to the label.
@@ -70,13 +60,23 @@ def label_to_color_image(label):
 
     return colormap[label]
 
-def vis_segmentation(image, seg_map, fig = None):
+CLASSES = np.asarray(
+    ['background', 'ortable', 'psc', 'vsc', 'human', 'cielinglight', 'mayostand', 'table', 'anesthesiacart', 'cannula',
+     'instrument'])
+FULL_LABEL_MAP = np.arange(len(CLASSES)).reshape(len(CLASSES), 1)
+FULL_COLOR_MAP = label_to_color_image(FULL_LABEL_MAP)
+
+def vis_segmentation(image, seg_map, fig=None, classes=None):
     """Visualizes input image, segmentation map and overlay view."""
     # plt.ion()
     if fig is None:
         fig = plt.figure(figsize=(15, 5))
     seg_image, overlay_image = label2rgb(seg_map, image)
-    grid_spec = gridspec.GridSpec(1, 3, width_ratios=[6, 6, 6])
+    if classes is not None:
+        grid_spec = gridspec.GridSpec(1, 4, width_ratios=[6, 6, 6, 1])
+    else:
+        grid_spec = gridspec.GridSpec(1, 3, width_ratios=[6, 6, 6])
+
 
     plt.subplot(grid_spec[0])
     plt.imshow(image)
@@ -93,14 +93,18 @@ def vis_segmentation(image, seg_map, fig = None):
     plt.axis('off')
     plt.title('segmentation overlay')
 
-    # unique_labels = np.unique(seg_map)
-    # ax = plt.subplot(grid_spec[3])
-    # plt.imshow(FULL_COLOR_MAP[unique_labels].astype(np.uint8), interpolation='nearest')
-    # ax.yaxis.tick_right()
-    # plt.yticks(range(len(unique_labels)), LABEL_NAMES[unique_labels])
-    # plt.xticks([], [])
-    # ax.tick_params(width=0.0)
-    # plt.grid('off')
+    if classes is not None:
+        classes = np.array(classes)
+        full_label_map = np.arange(len(classes)).reshape(len(classes), 1)
+        full_color_map = label_to_color_image(full_label_map)
+        unique_labels = np.unique(seg_map)
+        ax = plt.subplot(grid_spec[3])
+        plt.imshow(full_color_map[unique_labels].astype(np.uint8), interpolation='nearest')
+        ax.yaxis.tick_right()
+        plt.yticks(range(len(unique_labels)), classes[unique_labels])
+        plt.xticks([], [])
+        ax.tick_params(width=0.0)
+        plt.grid('off')
     # fig.canvas.draw()
     # plt.close()
     # plt.ion()
@@ -112,15 +116,16 @@ def vis_segmentation(image, seg_map, fig = None):
     plt.pause(0.01)
     return fig
 
+
 def fig2img(fig):
     data = np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep='')
     data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
     data = cv2.cvtColor(data, cv2.COLOR_RGB2BGR)  # COLOR_BGR2RGB
     return data
 
+
 def label2rgb(lbl, img=None, n_labels=None, alpha=0.5, colors=None):
     mask = create_pascal_label_colormap()[lbl].astype(np.uint8)
-    # mask = np.expand_dims(lbl, axis=2).astype(np.uint8)
 
     if img is not None:
         img_gray = Image.fromarray(img).convert('LA')
