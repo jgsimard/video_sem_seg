@@ -16,8 +16,8 @@ for idx, seq in enumerate(sequences):
     files[idx].sort()
 
 # split data
-train_percentage = 0.8
-validation_percentage = 0.2
+train_percentage = 0.6
+validation_percentage = 0.4
 
 total_num = len(files[0])
 train_num = np.round(total_num * train_percentage).astype(np.uint8)

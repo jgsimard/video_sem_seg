@@ -1,22 +1,33 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from models.modeling.backbone.xception import SeparableConv2d
 
 
 # sub-parts of the U-Net model
 class double_conv(nn.Module):
     '''(conv => BN => ReLU) * 2'''
 
-    def __init__(self, in_ch, out_ch):
+    def __init__(self, in_ch, out_ch, separable=False):
         super(double_conv, self).__init__()
-        self.conv = nn.Sequential(
-            nn.Conv2d(in_ch, out_ch, 3, padding=1),
-            nn.BatchNorm2d(out_ch),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(out_ch, out_ch, 3, padding=1),
-            nn.BatchNorm2d(out_ch),
-            nn.ReLU(inplace=True)
-        )
+        if separable:
+            self.conv = nn.Sequential(
+                SeparableConv2d(in_ch, out_ch, 3, BatchNorm=nn.BatchNorm2d),
+                nn.BatchNorm2d(out_ch),
+                nn.ReLU(inplace=True),
+                SeparableConv2d(out_ch, out_ch, 3, BatchNorm=nn.BatchNorm2d),
+                nn.BatchNorm2d(out_ch),
+                nn.ReLU(inplace=True)
+            )
+        else:
+            self.conv = nn.Sequential(
+                nn.Conv2d(in_ch, out_ch, 3, padding=1),
+                nn.BatchNorm2d(out_ch),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(out_ch, out_ch, 3, padding=1),
+                nn.BatchNorm2d(out_ch),
+                nn.ReLU(inplace=True)
+            )
 
     def forward(self, x):
         x = self.conv(x)
@@ -24,9 +35,9 @@ class double_conv(nn.Module):
 
 
 class inconv(nn.Module):
-    def __init__(self, in_ch, out_ch):
+    def __init__(self, in_ch, out_ch, separable=False):
         super(inconv, self).__init__()
-        self.conv = double_conv(in_ch, out_ch)
+        self.conv = double_conv(in_ch, out_ch, separable)
 
     def forward(self, x):
         x = self.conv(x)
@@ -34,11 +45,11 @@ class inconv(nn.Module):
 
 
 class down(nn.Module):
-    def __init__(self, in_ch, out_ch):
+    def __init__(self, in_ch, out_ch, separable=False):
         super(down, self).__init__()
         self.mpconv = nn.Sequential(
             nn.MaxPool2d(2),
-            double_conv(in_ch, out_ch)
+            double_conv(in_ch, out_ch, separable)
         )
 
     def forward(self, x):
@@ -47,7 +58,7 @@ class down(nn.Module):
 
 
 class up(nn.Module):
-    def __init__(self, in_ch, out_ch, bilinear=True):
+    def __init__(self, in_ch, out_ch, bilinear=True, separable=False):
         super(up, self).__init__()
 
         #  would be a nice idea if the upsampling could be learned too,
@@ -57,7 +68,7 @@ class up(nn.Module):
         else:
             self.up = nn.ConvTranspose2d(in_ch // 2, in_ch // 2, 2, stride=2)
 
-        self.conv = double_conv(in_ch, out_ch)
+        self.conv = double_conv(in_ch, out_ch, separable)
 
     def forward(self, x1, x2):
         x1 = self.up(x1)
@@ -144,13 +155,14 @@ class UNetMedium(nn.Module):
 
 
 class UNetSmall(nn.Module):
-    def __init__(self, n_channels, n_classes):
+    def __init__(self, n_channels, n_classes, separable=False):
         super(UNetSmall, self).__init__()
-        self.inc = inconv(n_channels, 64)
-        self.down1 = down(64, 128)
-        self.down2 = down(128, 128)
-        self.up1 = up(256, 64)
-        self.up2 = up(128, 64)
+        print(n_channels)
+        self.inc = inconv(n_channels, 64, separable=separable)
+        self.down1 = down(64, 128, separable=separable)
+        self.down2 = down(128, 128, separable=separable)
+        self.up1 = up(256, 64, separable=separable)
+        self.up2 = up(128, 64, separable=separable)
         self.outc = outconv(64, n_classes)
 
     def forward(self, x):
@@ -180,7 +192,7 @@ if __name__ == '__main__':
     out = model_medium(feat)
     print(out.shape)
 
-    model_small = UNetSmall(n_channels=(13 + 1) * 4, n_classes=13).cuda()
+    model_small = UNetSmall(n_channels=(13 + 1) * 4, n_classes=13, separable=True).cuda()
     torchsummary.summary(model_small, ((13 + 1) * 4, 287, 352))
     out = model_small(feat)
     print(out.shape)

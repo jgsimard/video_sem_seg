@@ -48,16 +48,18 @@ class Trainer(object):
                                  output_stride=args.out_stride,
                                  sync_bn=args.sync_bn,
                                  freeze_bn=args.freeze_bn,
-                                 unet_size=args.unet_size)
+                                 unet_size=args.unet_size,
+                                 separable_conv=args.separable_conv)
         model.merger = init_net(model.merger, type="kaiming", activation_mode='relu', distribution='normal')
 
         if args.adversarial_loss:
             print('define discriminator')
-            discriminator = Discriminator(input_nc=13,
+            discriminator = Discriminator(input_nc=self.nclass,
                                           img_height=287,
                                           img_width=352,
                                           filter_base=16,
-                                          n_iter=2,
+                                          num_block=4,
+                                          n_iter=args.n_critic,
                                           generator_loss_weight=self.args.generator_loss_weight,
                                           lr_ratio=1,
                                           gp_weigth=1)
@@ -126,7 +128,7 @@ class Trainer(object):
         self.model, self.optimizer = model, optimizer
 
         # Define Evaluator
-        self.evaluator = Evaluator(self.nclass)
+        self.define_evaluators()
         # Define lr scheduler
         self.scheduler = LR_Scheduler(args.lr_scheduler,
                                       args.lr,
@@ -172,6 +174,21 @@ class Trainer(object):
         # Clear start epoch if fine-tuning
         if args.ft:
             args.start_epoch = 0
+
+    def define_evaluators(self):
+        if self.args.dataset == "isi_intensity":
+            weights = np.array([1, 1, 1, 1, 1, 1, 0, 1, 1, 0, 0, 1, 1]) > 0.5
+        elif self.args.dataset == 'isi_multiview':
+            weights = self.args.skip_weights > 0.5
+        elif self.args.dataset == 'isi_multiview_2018':
+            weights = self.args.skip_weights > 0.5
+        elif (
+                self.args.dataset == "isi_rgb" or self.args.dataset == "isi_rgb_temporal") and self.args.skip_classes is not None:
+            weights = self.args.skip_weights > 0.5
+        else:
+            weights = None
+        print('Weights: ', weights)
+        self.evaluator = Evaluator(self.nclass, weights)
 
     def training(self, epoch):
         train_loss = 0.0
@@ -373,7 +390,8 @@ def get_args():
     parser.add_argument('--dataset',
                         type=str,
                         default='isi_intensity',
-                        choices=['pascal', 'coco', 'cityscapes', 'isi_intensity', 'isi_multiview'],
+                        choices=['pascal', 'coco', 'cityscapes', 'isi_intensity', 'isi_multiview',
+                                 'isi_multiview_2018'],
                         help='dataset name (default: isi)')
     parser.add_argument('--use-sbd',
                         action='store_true',
@@ -403,7 +421,7 @@ def get_args():
     parser.add_argument('--loss-type',
                         type=str,
                         default='ce',
-                        choices=['ce', 'focal', 'cem'],
+                        choices=['ce', 'focal', 'cem', 'dice'],
                         help='loss func type (default: ce)')
     parser.add_argument('--adversarial_loss',
                         type=bool,
@@ -520,17 +538,64 @@ def get_args():
     parser.add_argument('--path_pretrained_model',
                         type=str,
                         default=None)
-    parser.add_argument('--loss_type',
-                        type=str,
-                        default='dice')
     parser.add_argument('--generator_loss_weight',
                         type=float,
                         default=0.0005)
     parser.add_argument('--unet_size',
                         type=str,
                         default='Medium')
+    parser.add_argument('--skip_classes',
+                        type=str,
+                        default=None,
+                        help='Classes to skip in the computation of the iou and the loss')
+    parser.add_argument('--separable_conv',
+                        action='store_true',
+                        default=False,
+                        help='separable convolution')
+    parser.add_argument('--n_critic',
+                        type=int,
+                        default=2,
+                        help='how many iterations to switch between generator and discriminator')
 
     args = parser.parse_args()
+
+    # skip classes
+    if args.skip_classes is not None:
+        if args.dataset == 'isi_rgb' or args.dataset == 'isi_rgb_temporal':
+            CLASSES = ['ortable',
+                       'psc',
+                       'vsc',
+                       'human',
+                       'cielinglight',
+                       'mayostand',
+                       'table',
+                       'anesthesiacart',
+                       'cannula',
+                       'instrument']
+            print(CLASSES)
+            label_name_to_value = {x: i + 1 for i, x in enumerate(CLASSES)}
+            weights = np.ones(len(CLASSES) + 1)
+            for c in args.skip_classes.split(','):
+                weights[label_name_to_value[c]] = 0
+            args.skip_weights = weights
+
+        elif args.dataset == 'isi_multiview':
+            CLASSES = ['ortable', 'psc', 'vsc', 'human', 'cielinglight', 'floor', 'mayostand', 'table', 'chair', 'wall',
+                       'anesthesiacart', 'cannula']
+            label_name_to_value = {x: i + 1 for i, x in enumerate(CLASSES)}
+            weights = np.ones(len(CLASSES) + 1)
+            for c in args.skip_classes.split(','):
+                weights[label_name_to_value[c]] = 0
+            args.skip_weights = weights
+
+        elif args.dataset == 'isi_multiview_2018':
+            CLASSES = ['ortable', 'robot', 'human', 'cielinglight', 'floor', 'standtable', 'chair', 'wall',
+                       'visioncart']
+            label_name_to_value = {x: i + 1 for i, x in enumerate(CLASSES)}
+            weights = np.ones(len(CLASSES) + 1)
+            for c in args.skip_classes.split(','):
+                weights[label_name_to_value[c]] = 0
+            args.skip_weights = weights
 
     args.cuda = not args.no_cuda and torch.cuda.is_available()
     if args.cuda:
@@ -576,7 +641,7 @@ def get_args():
 
 
 def main():
-    os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "2"
     args = get_args()
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)

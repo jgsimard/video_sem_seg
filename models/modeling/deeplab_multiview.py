@@ -33,7 +33,7 @@ def visualize(image, soft_label, depth):
 
 class DeepLabMultiView(nn.Module):
     def __init__(self, backbone='resnet', output_stride=16, num_classes=21,
-                 sync_bn=True, freeze_bn=False, unet_size='Large'):
+                 sync_bn=True, freeze_bn=False, unet_size='Large', separable_conv=False):
         super(DeepLabMultiView, self).__init__()
 
         self.deeplab = DeepLab(backbone=backbone, output_stride=output_stride,
@@ -45,7 +45,7 @@ class DeepLabMultiView(nn.Module):
         else:
             BatchNorm = nn.BatchNorm2d
 
-        self.merger = build_merger(num_classes, unet_size)
+        self.merger = build_merger(num_classes, unet_size, separable_conv)
 
         self.num_classes = num_classes
 
@@ -95,6 +95,7 @@ class DeepLabMultiView(nn.Module):
 if __name__ == "__main__":
     import torchsummary
     import time
+
     # import torch2trt
 
     model = DeepLabMultiView(backbone='resnet', output_stride=16, num_classes=13).cuda()

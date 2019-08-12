@@ -4,7 +4,7 @@ import numpy as np
 from skimage import transform, filters
 from PIL import Image, ImageOps, ImageFilter
 import albumentations as aug
-from albumentations.core.transforms_interface import ImageOnlyTransform
+from albumentations.core.transforms_interface import ImageOnlyTransform, to_tuple
 
 
 def ToTensor(sample, batch, channel):
@@ -77,7 +77,7 @@ class ToPILImage(object):
 
 
 class RandomNoise(ImageOnlyTransform):
-    def __init__(self, always_apply=False, p=1.0, gauss_mean=0.0, gauss_var=0.01, sp_ratio=0.5, sp_amount=0.005):
+    def __init__(self, always_apply=False, p=0.5, gauss_mean=0.0, gauss_var=0.01, sp_ratio=0.5, sp_amount=0.005):
         super(RandomNoise, self).__init__(always_apply, p)
         self.gauss_mean = gauss_mean
         self.gauss_var = gauss_var
@@ -128,6 +128,27 @@ class RandomNoise(ImageOnlyTransform):
         return noisy
 
 
+class RandomDepthShift(ImageOnlyTransform):
+    def __init__(self, always_apply=False, p=0.5, limit=2.0, n_class=13, n_camera=4):
+        super(RandomDepthShift, self).__init__(always_apply, p)
+        self.limit = to_tuple(limit)
+        self.n_class = n_class
+        self.n_camera = n_camera
+
+    def apply(self, img, shift=0., **params):
+        ind = torch.empty([self.n_camera])
+        for i in range(self.n_camera):
+            ind[i] = self.n_camera * (self.n_class + 1) - 1
+        ind = ind.long()
+        img[:, :, ind] = img[:, :, ind] + shift
+        return img
+
+    def get_params(self):
+        return {
+            'shift': random.uniform(self.limit[0], self.limit[1])
+        }
+
+
 if __name__ == "__main__":
     from torchvision import transforms
     import matplotlib.pyplot as plt
@@ -156,6 +177,7 @@ if __name__ == "__main__":
                          aug.ShiftScaleRotate(p=0.0, rotate_limit=20, border_mode=0),
                          aug.Blur(p=0.0, blur_limit=3),
                          RandomNoise(p=1),
+                         RandomDepthShift(p=1)
                          ])
     sample = trans(image=img, mask=mask)
     img = sample['image']

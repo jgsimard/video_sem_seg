@@ -208,6 +208,9 @@ def decode_segmap(label_mask, dataset, plot=False):
     elif dataset == 'isi_multiview':
         n_classes = 13
         label_colours = get_pascal_labels()
+    elif dataset == 'isi_multiview_2018':
+        n_classes = 10
+        label_colours = get_pascal_labels()
     else:
         raise NotImplementedError
 

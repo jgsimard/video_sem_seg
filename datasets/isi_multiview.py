@@ -39,12 +39,13 @@ class DeepSightDepthMultiview(Dataset):
         self.plys_dir = os.path.join(root_dir, "PLYs")
         self.xmls_dir = os.path.join(root_dir, "XMLs")
         self.split = split
-        self.weights = [1, 1, 1, 1, 1, 1, 0, 1, 1, 0, 0, 1, 1]
+        # self.weights = [True, True, True, True, True, False, False, True, False, False, False, False, False]
+
         np.random.seed(seed)
 
         # RandomNoise needs to be after RandomBrightnessContrast due to the requirement of uint8 in RandomBrightnessContrast
         self.augmentation = aug.Compose([
-            aug.RandomBrightnessContrast(p=0.5),
+            aug.RandomBrightnessContrast(p=0.5),  # , brightness_limit=0.5, contrast_limit=0.5),
             RandomNoise(p=0.5),
         ])
 

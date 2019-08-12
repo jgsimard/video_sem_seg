@@ -6,13 +6,12 @@ import torchvision.transforms as T
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
 import matplotlib.pyplot as plt
-from models.modeling.sync_batchnorm.batchnorm import SynchronizedBatchNorm2d
 
-from torchvision import transforms
-from datasets.custom_transform_multichannel import ToNumpy, ToTensor, RandomDropOut, RandomNoise
+from datasets.custom_transform_multichannel import ToNumpy, ToTensor, RandomDropOut, RandomNoise, RandomDepthShift
 from datasets.multiview_info import *
 
 from models.modeling.unet_model import UNet, UNetMedium, UNetSmall
+from models.modeling.sync_batchnorm.batchnorm import SynchronizedBatchNorm2d
 import albumentations as aug
 
 
@@ -139,7 +138,7 @@ def transform_point_cloud(xyz_src, T_src, T_target):
 class Merger(nn.Module):
     """ Augmentation has to be put here due to projection"""
 
-    def __init__(self, num_classes, unet_size):
+    def __init__(self, num_classes, unet_size, separable_conv=False):
         super(Merger, self).__init__()
         self.num_classes = num_classes
 
@@ -148,14 +147,16 @@ class Merger(nn.Module):
         elif unet_size == 'Medium':
             self.unet = UNetMedium(n_channels=(self.num_classes + 1) * CAM_NUM, n_classes=self.num_classes)
         elif unet_size == 'Small':
-            self.unet = UNetSmall(n_channels=(self.num_classes + 1) * CAM_NUM, n_classes=self.num_classes)
+            self.unet = UNetSmall(n_channels=(self.num_classes + 1) * CAM_NUM, n_classes=self.num_classes,
+                                  separable=separable_conv)
 
         self._init_weight()
 
         self.transform_train = aug.Compose([
             aug.GaussianBlur(p=0.5),
             aug.HorizontalFlip(p=0.5),
-            aug.ShiftScaleRotate(p=0.7, rotate_limit=30, border_mode=0)
+            aug.ShiftScaleRotate(p=0.7, rotate_limit=30, border_mode=0),
+            RandomDepthShift(p=0.7, limit=2, n_class=num_classes),
         ])
 
         self.scale = 10.0
@@ -206,9 +207,9 @@ class Merger(nn.Module):
             order = torch.cat((torch.tensor([camid_target]).cuda(), order))
             feature_all_projected = torch.index_select(feature_all_projected, 1, order)
 
-            # some visualization
-            visualize(label[0, camid_target, :, :], feature_all_projected[0, :, :, :, :], self.num_classes,
-                      concat=False)
+            ##some visualization
+            # visualize(label[0, camid_target, :, :], feature_all_projected[0, :, :, :, :], self.num_classes,
+            #           concat=False)
 
             # augmentation and dropout
             if self.training:
@@ -223,14 +224,14 @@ class Merger(nn.Module):
                     label[b, camid_target, :, :] = sample['label']
                     # drop out
                     feature_all_projected[b, :, :, :, :] = RandomDropOut(feature_all_projected[b, :, :, :, :], CAM_NUM,
-                                                                         p=0.0)
+                                                                         p=0.7)
             # normalization
             feature_all_projected = feature_all_projected / self.scale
 
             # reformat the tensor to become BxCAM_NUM*(C+1)xHxW for network to process
             feature_target = feature_all_projected.view(batch, -1, HEIGHT, WIDTH).cuda()  # B x C x H x W
 
-            # # some visualization
+            ## some visualization
             # visualize(label[0, camid_target, :, :], feature_target[0, :, :, :], self.num_classes, concat=True)
 
             # go through network
@@ -250,8 +251,8 @@ class Merger(nn.Module):
                 m.bias.data.zero_()
 
 
-def build_merger(num_classes, unet_size):
-    return Merger(num_classes, unet_size)
+def build_merger(num_classes, unet_size, separable_conv=False):
+    return Merger(num_classes, unet_size, separable_conv)
 
 
 if __name__ == "__main__":
