@@ -75,7 +75,8 @@ class Trainer(object):
         if self.args.dataset == "isi_intensity":
             weights = np.array([1, 1, 1, 1, 1, 1, 0, 1, 1, 0, 0, 1, 1]) > 0.5
 
-        if (self.args.dataset == "isi_rgb" or self.args.dataset =="isi_rgb_temporal") and self.args.skip_classes is not None:
+        if (
+                self.args.dataset == "isi_rgb" or self.args.dataset == "isi_rgb_temporal") and self.args.skip_classes is not None:
             weights = self.args.skip_weights > 0.5
         else:
             weights = None
@@ -116,19 +117,12 @@ class Trainer(object):
 
     def build_adverserial_model(self):
         self.adv_loss = torch.nn.MSELoss()
-        self.generator_loss_weight = self.args.generator_loss_weight
-        self.gradient_penalty_weight = self.args.gradient_penalty_weight
-        self.n_critic = self.args.n_critic
         self.train_d = False
         print('Define discriminator')
         self.discriminator = Discriminator(input_nc=self.nclass,
                                            img_height=self.args.img_shape[0],
                                            img_width=self.args.img_shape[1],
                                            filter_base=16,
-                                           n_iter=self.args.n_critic,
-                                           generator_loss_weight=self.args.generator_loss_weight,
-                                           lr_ratio=self.args.lr_ratio,
-                                           gp_weigth=self.args.gradient_penalty_weight,
                                            num_block=self.args.discriminator_blocks)
         self.discriminator = init_net(self.discriminator,
                                       type='kaiming',
@@ -211,7 +205,7 @@ class Trainer(object):
         self.optimizer_D.zero_grad()
 
         # switch training discriminator and network
-        self.train_d = not self.train_d if (i + num_img_tr * epoch) % self.discriminator.module.n_iter == 0 else self.train_d
+        self.train_d = not self.train_d if (i + num_img_tr * epoch) % self.args.n_critic == 0 else self.train_d
 
         loss_D = 0.0
         loss_G = 0.0
@@ -251,7 +245,7 @@ class Trainer(object):
             fake_loss = self.adv_loss(fake_validity - mean_validity_real, torch.ones_like(fake_validity))
             loss_G += real_loss + fake_loss
 
-            adv_loss = self.discriminator.module.generator_loss_weight * loss_G
+            adv_loss = self.args.generator_loss_weight * loss_G
 
             loss += adv_loss
 
@@ -298,9 +292,6 @@ class Trainer(object):
             else:
                 loss.backward()
                 self.optimizer.step()
-                train_loss += loss.item()
-                tbar.set_description('Train loss: %.3f' % (train_loss / (i + 1)))
-                self.writer.add_scalar('train/total_loss_iter', loss.item(), i + num_img_tr * epoch)
 
             # Show 10 * 3 inference results each epoch
             if i % (num_img_tr // 2) == 0:
@@ -392,7 +383,8 @@ def get_args():
     parser.add_argument('--dataset',
                         type=str,
                         default='isi',
-                        choices=['pascal', 'coco', 'cityscapes', 'isi_rgb', 'isi_intensity', 'isi_depth', 'isi_rgb_temporal'],
+                        choices=['pascal', 'coco', 'cityscapes', 'isi_rgb', 'isi_intensity', 'isi_depth',
+                                 'isi_rgb_temporal', 'isi_multiview', 'isi_multiview_2018'],
                         help='dataset name (default: isi)')
     parser.add_argument('--workers',
                         type=int,
@@ -627,6 +619,17 @@ def get_args():
                         default=False,
                         help='Only compute validation (default: False)')
 
+    # MultiView
+    parser.add_argument('--unet_size',
+                        type=str,
+                        default='Small')
+    parser.add_argument('--separable_conv',
+                        action='store_true',
+                        default=False,
+                        help='separable convolution')
+    parser.add_argument('--path_pretrained_model',
+                        type=str,
+                        default=None)
 
     args = parser.parse_args()
 
@@ -674,7 +677,6 @@ def get_args():
         args.checkname = 'deeplab-' + str(args.backbone)
 
     if args.skip_classes is not None:
-        print(args.dataset, args.dataset == 'isi_rgb')
         if args.dataset == 'isi_rgb' or args.dataset == 'isi_rgb_temporal':
             CLASSES = ['ortable',
                        'psc',
@@ -687,6 +689,23 @@ def get_args():
                        'cannula',
                        'instrument']
             print(CLASSES)
+            label_name_to_value = {x: i + 1 for i, x in enumerate(CLASSES)}
+            weights = np.ones(len(CLASSES) + 1)
+            for c in args.skip_classes.split(','):
+                weights[label_name_to_value[c]] = 0
+            args.skip_weights = weights
+        elif args.dataset == 'isi_multiview':
+            CLASSES = ['ortable', 'psc', 'vsc', 'human', 'cielinglight', 'floor', 'mayostand', 'table', 'chair', 'wall',
+                       'anesthesiacart', 'cannula']
+            label_name_to_value = {x: i + 1 for i, x in enumerate(CLASSES)}
+            weights = np.ones(len(CLASSES) + 1)
+            for c in args.skip_classes.split(','):
+                weights[label_name_to_value[c]] = 0
+            args.skip_weights = weights
+
+        elif args.dataset == 'isi_multiview_2018':
+            CLASSES = ['ortable', 'robot', 'human', 'cielinglight', 'floor', 'standtable', 'chair', 'wall',
+                       'visioncart']
             label_name_to_value = {x: i + 1 for i, x in enumerate(CLASSES)}
             weights = np.ones(len(CLASSES) + 1)
             for c in args.skip_classes.split(','):
@@ -725,5 +744,5 @@ def main():
 
 
 if __name__ == "__main__":
-    os.environ["CUDA_VISIBLE_DEVICES"]="2"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "2"
     main()

@@ -11,14 +11,8 @@ WIDTH = 352
 
 
 class Discriminator(nn.Module):
-    def __init__(self, input_nc, img_height, img_width, filter_base=16, num_block=6, n_iter=500,
-                 generator_loss_weight=2, gp_weigth=10, lr_ratio=0.1):
+    def __init__(self, input_nc, img_height, img_width, filter_base=16, num_block=6):
         super(Discriminator, self).__init__()
-
-        self.n_iter = n_iter
-        self.generator_loss_weight = generator_loss_weight
-        self.lr_ratio = lr_ratio
-        self.gp_weigth = gp_weigth
 
         def discriminator_block(in_filters, out_filters, bn=True):
             block = [nn.Conv2d(in_filters, out_filters, 3, 2, 1), nn.LeakyReLU(0.2, inplace=True), nn.Dropout2d(0.25)]
@@ -103,7 +97,7 @@ if __name__ == '__main__':
     # target_onehot = onehot(target, 5)
     # target_smoothed = label_smoothing(target_onehot, 50)
 
-    d = Discriminator(13, HEIGHT, WIDTH, filter_base=16,num_block=4).cuda()
+    d = Discriminator(13, HEIGHT, WIDTH, filter_base=16, num_block=4).cuda()
 
     # torchsummary.summary(d, (13, 287, 352))
 
